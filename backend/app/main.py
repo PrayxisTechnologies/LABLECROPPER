@@ -1,7 +1,8 @@
 """Main FastAPI application entrypoint for LabelFlow."""
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.api.v1.router import api_v1_router
 from app.core.config import get_settings
 from app.core.errors import LabelFlowException, label_flow_exception_handler
@@ -24,7 +25,32 @@ def create_application() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
-    # Configure CORS for Next.js frontend
+    # Universal CORS Guarantee Middleware: Intercepts all requests & OPTIONS preflight
+    @app.middleware("http")
+    async def cors_guarantee_middleware(request: Request, call_next):
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Max-Age"] = "86400"
+            return response
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.error("Unhandled API exception: %s", str(exc), exc_info=True)
+            response = JSONResponse(
+                status_code=500,
+                content={"error": {"code": "INTERNAL_SERVER_ERROR", "message": str(exc)}},
+            )
+
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+
+    # Standard Starlette CORSMiddleware
     cors_origins = settings.cors_origins_list
     allow_wildcard = "*" in cors_origins
 

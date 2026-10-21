@@ -11,7 +11,7 @@ import {
 } from "./types";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  process.env.NEXT_PUBLIC_API_URL || "https://lablecropper.onrender.com/api/v1";
 
 /**
  * Check backend health and phase capabilities.
@@ -108,10 +108,23 @@ export async function processLabelsOnBackend(
   formData.append("remove_invoice", String(config.remove_invoice));
   formData.append("enable_sku_picklist", String(config.enable_sku_picklist));
 
-  const res = await fetch(`${API_BASE_URL}/labels/process`, {
-    method: "POST",
-    body: formData,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}/labels/process`, {
+      method: "POST",
+      body: formData,
+    });
+  } catch (directErr) {
+    // Transparent fallback to same-origin proxy (100% immune to CORS blockers)
+    try {
+      res = await fetch(`/api/proxy/labels/process`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch {
+      throw directErr;
+    }
+  }
 
   if (!res.ok) {
     let errorDetail = `Processing failed with status ${res.status}`;
