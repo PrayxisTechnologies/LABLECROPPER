@@ -200,7 +200,7 @@ export default function CropLabelsPage() {
               main_skus: processingResult.main_skus || [],
               all_skus: processingResult.all_skus || [],
             }}
-            currentSort={processingConfig.sort_by}
+            currentSort={processingConfig.sort_by as SortOption}
             onApplySort={handleApplyNewSort}
             isReSorting={isProcessing}
           />

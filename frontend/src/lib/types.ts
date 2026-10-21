@@ -56,7 +56,7 @@ export type SortOption =
 
 export interface ProcessingConfig {
   output_format: string; // "4x6_thermal" | "a4_grid"
-  sort_by: SortOption | string;
+  sort_by: SortOption;
   remove_invoice: boolean;
   enable_sku_picklist: boolean;
 }

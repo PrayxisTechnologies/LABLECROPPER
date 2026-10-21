@@ -6,7 +6,7 @@ import { UploadInspectionResponse, MainSkuSummary, SubSkuSummary, SortOption } f
 interface UploadSummaryCardProps {
   data: UploadInspectionResponse;
   isLoading?: boolean;
-  currentSort?: SortOption;
+  currentSort?: SortOption | string;
   onApplySort?: (sort: SortOption) => void;
   isReSorting?: boolean;
 }
@@ -26,11 +26,13 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
   const [sortAsc, setSortAsc] = useState<boolean>(true);
 
   // Selected PDF Organization Mode in the dropdown
-  const [selectedSort, setSelectedSort] = useState<SortOption>(currentSort);
+  const [selectedSort, setSelectedSort] = useState<SortOption>(
+    (currentSort as SortOption) || "sku_courier"
+  );
 
   useEffect(() => {
     if (currentSort) {
-      setSelectedSort(currentSort);
+      setSelectedSort((currentSort as SortOption) || "sku_courier");
     }
   }, [currentSort]);
 

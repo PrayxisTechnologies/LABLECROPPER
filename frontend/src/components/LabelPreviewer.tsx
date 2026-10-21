@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ProcessingJobResponse } from "@/lib/types";
 import { getAbsoluteDownloadUrl, getViewPdfUrl } from "@/lib/api";
 
@@ -25,7 +25,7 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
     : null;
 
   // Print handler targeting the embedded PDF iframe
-  const handlePrint = () => {
+  const handlePrint = useCallback(() => {
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
         iframeRef.current.contentWindow.focus();
@@ -40,17 +40,17 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
       printWindow.focus();
       printWindow.print();
     }
-  };
+  }, [viewPdfUrl]);
 
   // Direct download trigger
-  const handleDownload = () => {
+  const handleDownload = useCallback(() => {
     const a = document.createElement("a");
     a.href = downloadPdfUrl;
     a.download = `meesho_thermal_4x6_${result.job_id}.pdf`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  };
+  }, [downloadPdfUrl, result.job_id]);
 
   // Keyboard shortcut listener (Ctrl+P, Ctrl+S, Esc, F)
   useEffect(() => {
@@ -83,7 +83,7 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onReset, downloadPdfUrl, viewPdfUrl]);
+  }, [onReset, handlePrint, handleDownload]);
 
   return (
     <div
