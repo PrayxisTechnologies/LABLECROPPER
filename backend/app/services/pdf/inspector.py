@@ -35,6 +35,21 @@ RE_INVOICE_TABLE_START = re.compile(
     re.I,
 )
 
+# ==============================================================================
+# ✂️ MEESHO A4 LABEL CROP BOUNDS (MANUAL CONTROLS)
+# ==============================================================================
+# Standard Meesho A4 page (595.3 x 841.9 pt) me se label ka exact crop area:
+# X0 = Left margin (8.0 pt - label ke outer black border se 2 pt pehle)
+# Y0 = Top margin (16.0 pt - "Customer Address" ke outer black border se 2 pt upar)
+# X1 = Right margin (586.0 pt - right outer black border ke 2 pt baad)
+# Y1 = Bottom cutoff (353.5 pt - "TAX INVOICE" ke just niche, "BILL TO" table se upar)
+# Agar aapko crop boundary kam/jyada karni ho, toh in values ko change kar sakte hain:
+MEESHO_CROP_X0 = 8.0
+MEESHO_CROP_Y0 = 16.0
+MEESHO_CROP_X1 = 586.0
+MEESHO_CROP_Y1 = 353.5
+# ==============================================================================
+
 
 class PageInspectionResult:
     """Detailed structural analysis of a single PDF page."""
@@ -123,9 +138,14 @@ class PDFPageInspector:
 
             if has_shipping:
                 # Shipping label is on top, GST Tax invoice is on bottom.
-                # Standard Meesho crop bounds: 10 pt left, 18 pt top, 584 pt right, 352 pt bottom.
+                # Standard Meesho crop bounds with safe border margins:
                 # Includes TAX INVOICE header, excludes BILL TO / SHIP TO & Sold By table.
-                crop_box = fitz.Rect(10.0, 18.0, 584.0, 352.0)
+                crop_box = fitz.Rect(
+                    MEESHO_CROP_X0,
+                    MEESHO_CROP_Y0,
+                    MEESHO_CROP_X1,
+                    MEESHO_CROP_Y1,
+                )
                 return PageInspectionResult(
                     page_number=page_index + 1,
                     width=width,
@@ -133,7 +153,7 @@ class PDFPageInspector:
                     rotation=rotation,
                     layout_type="split_label_invoice",
                     label_rect=crop_box,
-                    invoice_rect=fitz.Rect(0, 352.0, width, height),
+                    invoice_rect=fitz.Rect(0, MEESHO_CROP_Y1, width, height),
                     is_safe_to_crop=True,
                     is_flagged_for_review=False,
                     full_text=top_text,

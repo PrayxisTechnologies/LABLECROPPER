@@ -3,9 +3,24 @@
 from typing import Optional, Tuple
 import fitz  # PyMuPDF
 
+# ==============================================================================
+# 🖨️ THERMAL PRINTER SAFE PADDING SETTINGS (MANUAL CONTROLS)
+# ==============================================================================
+# Charo sides me safe padding taaki thermal printer (TSC, Zebra, TVS, etc.)
+# print karte waqt border lines, barcode, ya TAX INVOICE text ko cut na kare.
+#
+# Unit: Points (72 points = 1 inch, 1 mm ≈ 2.83 pt)
+# Default: 10.0 pt (~3.5 mm) safe margin around the label.
+# Agar aapko padding kam/jyada karni ho, toh in values ko directly change kar sakte hain:
+DEFAULT_PADDING_LEFT = 10.0    # Left margin in points (~3.5 mm)
+DEFAULT_PADDING_TOP = 10.0     # Top margin in points (~3.5 mm)
+DEFAULT_PADDING_RIGHT = 10.0   # Right margin in points (~3.5 mm)
+DEFAULT_PADDING_BOTTOM = 10.0  # Bottom margin in points (~3.5 mm)
+# ==============================================================================
+
 
 class PDFCropperService:
-    """Extracts, crops, and renders shipping labels onto tightly-fitted label pages (matching E-cropper)."""
+    """Extracts, crops, and renders shipping labels onto safe thermal label pages."""
 
     def __init__(self) -> None:
         self.is_implemented = True
@@ -16,26 +31,38 @@ class PDFCropperService:
         src_page_num: int,
         crop_box: fitz.Rect,
         target_doc: fitz.Document,
-        margin_pt: float = 0.0,
+        pad_left: float = DEFAULT_PADDING_LEFT,
+        pad_top: float = DEFAULT_PADDING_TOP,
+        pad_right: float = DEFAULT_PADDING_RIGHT,
+        pad_bottom: float = DEFAULT_PADDING_BOTTOM,
     ) -> fitz.Page:
-        """Render a cropped section of a source PDF page onto a page matching the crop box.
+        """Render a cropped section of a source PDF page with safe margins on all 4 sides.
 
-        Removes all outer white wasted margin/canvas so the output PDF contains ONLY the cropped label,
-        matching E-cropper behavior (no large blank top/bottom/side areas).
         Maintains razor-sharp 100% vector graphics, crisp barcodes, and scannable QR codes.
+        Prevents hardware printer rollers from clipping outer black border lines or text.
         """
         box_w = max(10.0, crop_box.width)
         box_h = max(10.0, crop_box.height)
 
-        # Create page matching the exact cropped label dimensions (zero white margins like E-cropper)
+        # Total canvas size including the 4-sided safe padding
+        page_width = box_w + pad_left + pad_right
+        page_height = box_h + pad_top + pad_bottom
+
+        # Create target page matching the label + padding dimensions
         target_page = target_doc.new_page(
-            width=box_w,
-            height=box_h,
+            width=page_width,
+            height=page_height,
         )
 
-        printable_rect = fitz.Rect(0, 0, box_w, box_h)
+        # Destination rectangle centered inside the safe padding
+        printable_rect = fitz.Rect(
+            pad_left,
+            pad_top,
+            pad_left + box_w,
+            pad_top + box_h,
+        )
 
-        # Render vector-preserved page content clipped to crop_box with 1:1 scale and zero padding
+        # Render vector-preserved page content clipped to crop_box with 1:1 scale
         target_page.show_pdf_page(
             printable_rect,
             src_doc,
