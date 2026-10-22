@@ -23,7 +23,7 @@ export async function checkBackendHealth(): Promise<{
 }> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const res = await fetch(`${API_BASE_URL}/health`, {
       method: "GET",
@@ -108,38 +108,47 @@ export async function processLabelsOnBackend(
   formData.append("remove_invoice", String(config.remove_invoice));
   formData.append("enable_sku_picklist", String(config.enable_sku_picklist));
 
-  let res: Response;
+  let res: Response | null = null;
   try {
     res = await fetch(`${API_BASE_URL}/labels/process`, {
       method: "POST",
       body: formData,
     });
-  } catch (directErr) {
-    // Transparent fallback to same-origin proxy (100% immune to CORS blockers)
+  } catch {
+    res = null;
+  }
+
+  // If direct request failed or returned server error (502, 500), fallback to same-origin proxy
+  if (!res || !res.ok) {
     try {
-      res = await fetch(`/api/proxy/labels/process`, {
+      const proxyRes = await fetch(`/api/proxy/labels/process`, {
         method: "POST",
         body: formData,
       });
+      if (proxyRes.ok || !res) {
+        res = proxyRes;
+      }
     } catch {
-      throw directErr;
+      // Retain original response
     }
   }
 
-  if (!res.ok) {
-    let errorDetail = `Processing failed with status ${res.status}`;
-    try {
-      const errJson = await res.json();
-      if (errJson?.error?.message) {
-        errorDetail = errJson.error.message;
-      } else if (errJson?.detail) {
-        errorDetail =
-          typeof errJson.detail === "string"
-            ? errJson.detail
-            : JSON.stringify(errJson.detail);
+  if (!res || !res.ok) {
+    let errorDetail = res ? `Processing failed with status ${res.status}` : "Could not connect to processing server.";
+    if (res) {
+      try {
+        const errJson = await res.json();
+        if (errJson?.error?.message) {
+          errorDetail = errJson.error.message;
+        } else if (errJson?.detail) {
+          errorDetail =
+            typeof errJson.detail === "string"
+              ? errJson.detail
+              : JSON.stringify(errJson.detail);
+        }
+      } catch {
+        // Ignore JSON parse error
       }
-    } catch {
-      // Ignore JSON parse error
     }
     throw new Error(errorDetail);
   }
