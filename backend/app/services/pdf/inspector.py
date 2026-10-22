@@ -194,8 +194,8 @@ class PDFPageInspector:
             crop_y1 = 352.0
             try:
                 bill_words = [
-                    w for w in page.get_text("words")
-                    if 340.0 <= w[1] <= 400.0 and w[4].lower() in ("bill", "sold")
+                    w for w in page.get_text("words", clip=fitz.Rect(0, 335.0, width, 405.0))
+                    if w[4].lower() in ("bill", "sold")
                 ]
                 if bill_words:
                     crop_y1 = min(w[1] for w in bill_words) - 1.5

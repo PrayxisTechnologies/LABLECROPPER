@@ -64,8 +64,8 @@ class PDFBatchProcessor:
         open_docs: Dict[str, fitz.Document] = {}
 
         try:
-            for file in files:
-                filename = file.filename or "unknown.pdf"
+            for f_idx, file in enumerate(files):
+                filename = file.filename or f"upload_{f_idx+1}.pdf"
 
                 # 1. Structural validation
                 validation_item, raw_bytes = await pdf_validator_service.validate_uploaded_file(file)
@@ -75,12 +75,15 @@ class PDFBatchProcessor:
                     )
                     continue
 
-                # 2. Open PDF with PyMuPDF
+                # 2. Persist to disk buffer to prevent PyMuPDF memory stream segfaults & reduce RAM
+                disk_file_path = job_dir / f"src_{f_idx}_{filename}"
                 try:
-                    src_doc = fitz.open(stream=raw_bytes, filetype="pdf")
+                    with open(disk_file_path, "wb") as f_out:
+                        f_out.write(raw_bytes)
+                    src_doc = fitz.open(str(disk_file_path))
                     open_docs[filename] = src_doc
                 except Exception as e:
-                    warnings.append(f"Unable to read PDF stream for '{filename}': {str(e)}")
+                    warnings.append(f"Unable to read PDF file for '{filename}': {str(e)}")
                     continue
 
                 file_page_count = len(src_doc)

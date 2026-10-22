@@ -196,8 +196,15 @@ async def process_labels(
         enable_sku_picklist=enable_sku_picklist,
     )
 
-    result = await batch_processor.process_batch(files, config)
-    return result
+    try:
+        result = await batch_processor.process_batch(files, config)
+        return result
+    except Exception as exc:
+        logger.error("Batch processing failed with error: %s", str(exc), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Label processing failed: {str(exc)}",
+        )
 
 
 @router.get(
