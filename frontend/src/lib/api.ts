@@ -10,8 +10,24 @@ import {
   UploadInspectionResponse,
 } from "./types";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "https://lablecropper.onrender.com/api/v1";
+/**
+ * Dynamic API Base URL resolution:
+ * - When in browser on localhost/127.0.0.1 -> targets http://localhost:8000/api/v1 (Local Python backend)
+ * - When in browser on Vercel/production -> targets https://lablecropper.onrender.com/api/v1 (Render backend)
+ * - Or uses NEXT_PUBLIC_API_URL environment variable if explicitly set
+ */
+export function getApiBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://localhost:8000/api/v1";
+    }
+  }
+  return "https://lablecropper.onrender.com/api/v1";
+}
 
 /**
  * Check backend health and phase capabilities.
@@ -21,11 +37,12 @@ export async function checkBackendHealth(): Promise<{
   data?: BackendHealthResponse;
   error?: string;
 }> {
+  const baseUrl = getApiBaseUrl();
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    const res = await fetch(`${API_BASE_URL}/health`, {
+    const res = await fetch(`${baseUrl}/health`, {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -59,12 +76,13 @@ export async function checkBackendHealth(): Promise<{
 export async function validateFilesOnBackend(
   files: File[]
 ): Promise<BackendValidationResponse> {
+  const baseUrl = getApiBaseUrl();
   const formData = new FormData();
   files.forEach((file) => {
     formData.append("files", file);
   });
 
-  const res = await fetch(`${API_BASE_URL}/labels/validate`, {
+  const res = await fetch(`${baseUrl}/labels/validate`, {
     method: "POST",
     body: formData,
   });
@@ -97,6 +115,7 @@ export async function processLabelsOnBackend(
   files: File[],
   config: ProcessingConfig
 ): Promise<ProcessingJobResponse> {
+  const baseUrl = getApiBaseUrl();
   const formData = new FormData();
 
   files.forEach((file) => {
@@ -110,7 +129,7 @@ export async function processLabelsOnBackend(
 
   let res: Response | null = null;
   try {
-    res = await fetch(`${API_BASE_URL}/labels/process`, {
+    res = await fetch(`${baseUrl}/labels/process`, {
       method: "POST",
       body: formData,
     });
@@ -163,8 +182,9 @@ export function getAbsoluteDownloadUrl(relativeUrl: string): string {
   if (relativeUrl.startsWith("http://") || relativeUrl.startsWith("https://")) {
     return relativeUrl;
   }
-  // Replace /api/v1 prefix if API_BASE_URL already contains it
-  const base = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+  const baseUrl = getApiBaseUrl();
+  // Replace /api/v1 prefix if baseUrl already contains it
+  const base = baseUrl.replace(/\/api\/v1\/?$/, "");
   return `${base}${relativeUrl.startsWith("/") ? "" : "/"}${relativeUrl}`;
 }
 
@@ -172,14 +192,16 @@ export function getAbsoluteDownloadUrl(relativeUrl: string): string {
  * URL to fetch 1-indexed page PNG thumbnail for live browser preview.
  */
 export function getPagePreviewUrl(jobId: string, pageNumber: number): string {
-  return `${API_BASE_URL}/labels/jobs/${jobId}/preview/page/${pageNumber}`;
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}/labels/jobs/${jobId}/preview/page/${pageNumber}`;
 }
 
 /**
  * URL to view complete 4x6 thermal PDF inline in browser.
  */
 export function getViewPdfUrl(jobId: string): string {
-  return `${API_BASE_URL}/labels/jobs/${jobId}/view/pdf`;
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}/labels/jobs/${jobId}/view/pdf`;
 }
 
 /**

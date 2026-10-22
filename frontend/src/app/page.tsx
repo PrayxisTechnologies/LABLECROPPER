@@ -80,8 +80,14 @@ export default function HomePage() {
     if (rawFiles.length === 0) return;
 
     if (backendOnline === false) {
+      const isLocal =
+        typeof window !== "undefined" &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1");
       setErrorMessage(
-        "FastAPI Backend is currently unreachable at http://localhost:8000. Please start backend server to process."
+        isLocal
+          ? "Local FastAPI Backend is unreachable at http://localhost:8000. Start it in terminal: python -m uvicorn app.main:app --reload --port 8000"
+          : "Backend server is connecting to Render. Please wait a moment and try again."
       );
       return;
     }
