@@ -34,22 +34,34 @@ def get_main_sku_group(sku: str) -> str:
     return "OTHER"
 
 
-# Regex patterns for Meesho label line items
-SKU_PATTERNS = [
-    r"\bSKU\s*(?:Code|Name|ID|No)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)",
-    r"\bItem\s*(?:Code|ID|Name)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)",
-    r"\bProduct\s*(?:Code|ID)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)",
+# Regex patterns for Meesho label line items precompiled for maximum speed
+COMPILED_SKU_PATTERNS = [
+    re.compile(r"\bSKU\s*(?:Code|Name|ID|No)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", re.I),
+    re.compile(r"\bItem\s*(?:Code|ID|Name)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", re.I),
+    re.compile(r"\bProduct\s*(?:Code|ID)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", re.I),
 ]
 
-QTY_PATTERNS = [
-    r"\b(?:Qty|Quantity)\s*[:\-#]\s*(\d+)",
-    r"\bQ\s*[:\-]\s*(\d+)",
+COMPILED_QTY_PATTERNS = [
+    re.compile(r"\b(?:Qty|Quantity)\s*[:\-#]\s*(\d+)", re.I),
+    re.compile(r"\bQ\s*[:\-]\s*(\d+)", re.I),
 ]
 
-ORDER_PATTERNS = [
-    r"\b(?:Sub\s*Order\s*No|Suborder\s*ID|Suborder\s*No)\s*[:\-#]\s*([A-Za-z0-9_\-]+)",
-    r"\b(?:Order\s*No|Order\s*ID)\s*[:\-#]\s*([A-Za-z0-9_\-]+)",
+COMPILED_ORDER_PATTERNS = [
+    re.compile(r"\b(?:Sub\s*Order\s*No|Suborder\s*ID|Suborder\s*No)\s*[:\-#]\s*([A-Za-z0-9_\-]+)", re.I),
+    re.compile(r"\b(?:Order\s*No|Order\s*ID)\s*[:\-#]\s*([A-Za-z0-9_\-]+)", re.I),
 ]
+
+RE_SKU_WORD = re.compile(r"\bSKU\b", re.I)
+RE_SKU_COLON = re.compile(r"\bSKU\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", re.I)
+RE_TABLE_MATCH = re.compile(
+    r"\bSKU\b(?:\s+Size)?(?:\s+Qty)?(?:\s+Color)?(?:\s+Order(?:\s*No\.?)?)?[\s\r\n]+([A-Za-z0-9_\-\.\/]+)",
+    re.I,
+)
+RE_KNOWN_PATTERN = re.compile(
+    r"\b((?:Po\d+Green|Po10Green|rspk\d+brown|rspk10brown|Green|Brown)[A-Za-z0-9_\-]*)\b",
+    re.I,
+)
+RE_ORDER_FALLBACK = re.compile(r"\b(\d{15,22}(?:_\d+)?)\b")
 
 
 class PicklistGeneratorService:
@@ -64,15 +76,15 @@ class PicklistGeneratorService:
             return [], None
 
         order_id: Optional[str] = None
-        for pattern in ORDER_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
+        for pattern in COMPILED_ORDER_PATTERNS:
+            match = pattern.search(text)
             if match:
                 order_id = match.group(1).strip()
                 break
 
         quantity = 1
-        for pattern in QTY_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
+        for pattern in COMPILED_QTY_PATTERNS:
+            match = pattern.search(text)
             if match:
                 try:
                     quantity = max(1, int(match.group(1).strip()))
@@ -103,9 +115,9 @@ class PicklistGeneratorService:
         # 1. Line-by-line inspection (most accurate when newlines exist)
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         for idx, line in enumerate(lines):
-            if re.search(r"\bSKU\b", line, re.I):
+            if RE_SKU_WORD.search(line):
                 # Case A: SKU is followed by a colon/code on same line (e.g. SKU: BLU_KURTI_XL)
-                same_match = re.search(r"\bSKU\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", line, re.I)
+                same_match = RE_SKU_COLON.search(line)
                 if same_match:
                     add_candidate(same_match.group(1))
                 # Case B: Standard Meesho table header (SKU Size Qty Color Order No.)
@@ -129,33 +141,25 @@ class PicklistGeneratorService:
 
         # 2. Table regex pattern (works even if lines were space-joined)
         if not extracted_items:
-            table_match = re.search(
-                r"\bSKU\b(?:\s+Size)?(?:\s+Qty)?(?:\s+Color)?(?:\s+Order(?:\s*No\.?)?)?[\s\r\n]+([A-Za-z0-9_\-\.\/]+)",
-                text,
-                re.IGNORECASE,
-            )
+            table_match = RE_TABLE_MATCH.search(text)
             if table_match:
                 add_candidate(table_match.group(1))
 
         # 3. Known product SKU pattern fallback (Po10Green..., rspk10brown..., Green..., Brown...)
         if not extracted_items:
-            known_pattern = re.search(
-                r"\b((?:Po\d+Green|Po10Green|rspk\d+brown|rspk10brown|Green|Brown)[A-Za-z0-9_\-]*)\b",
-                text,
-                re.IGNORECASE,
-            )
+            known_pattern = RE_KNOWN_PATTERN.search(text)
             if known_pattern:
                 add_candidate(known_pattern.group(1))
 
         # 4. Standard key-value patterns (e.g. SKU: ABC123, Item Code: XYZ)
         if not extracted_items:
-            for pattern in SKU_PATTERNS:
-                for match in re.finditer(pattern, text, re.IGNORECASE):
+            for pattern in COMPILED_SKU_PATTERNS:
+                for match in pattern.finditer(text):
                     add_candidate(match.group(1))
 
         # Fallback for order ID extraction (Meesho 18-digit IDs)
         if not order_id:
-            order_match = re.search(r"\b(\d{15,22}(?:_\d+)?)\b", text)
+            order_match = RE_ORDER_FALLBACK.search(text)
             if order_match:
                 order_id = order_match.group(1)
 

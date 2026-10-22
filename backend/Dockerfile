@@ -19,5 +19,5 @@ COPY . .
 ENV PORT=8000
 EXPOSE 8000
 
-# Start Uvicorn ASGI server bound to 0.0.0.0 and dynamic PORT
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Start Uvicorn ASGI server bound to 0.0.0.0 and dynamic PORT with extended timeouts
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 75"]

@@ -3,12 +3,8 @@
 import re
 from typing import Dict, List, Optional, Tuple
 
-# Known logistics partners with regex patterns ordered by specificity
+# Known logistics partners with regex patterns ordered by frequency on Meesho / Indian E-commerce
 COURIER_PATTERNS = [
-    ("Delhivery", [
-        r"\bDELHIVERY\s+(SURFACE|EXPRESS|AIR)\b",
-        r"\bDELHIVERY\b",
-    ]),
     ("Valmo", [
         r"\bVALMO\w*\b",
         r"\bVL\d{8,}\b",
@@ -25,6 +21,10 @@ COURIER_PATTERNS = [
         r"\bXPRESSBEES\b",
         r"\b13409\d{9,}\b",
         r"\bXB\b",
+    ]),
+    ("Delhivery", [
+        r"\bDELHIVERY\s+(SURFACE|EXPRESS|AIR)\b",
+        r"\bDELHIVERY\b",
     ]),
     ("Ekart", [
         r"\bEKART\s+LOGISTICS\b",
@@ -47,10 +47,17 @@ COURIER_PATTERNS = [
     ]),
 ]
 
-
-COMPILED_COURIER_PATTERNS = [
-    (name, [re.compile(p, re.I) for p in patterns])
-    for name, patterns in COURIER_PATTERNS
+# Combined single regex for each provider for microsecond throughput
+FAST_COURIER_CHECKS = [
+    ("Valmo", re.compile(r"\b(VALMO\w*|VL\d{8,}|PLO\-[A-Z0-9]*|VALMO\s+LOGISTICS)\b", re.I)),
+    ("Shadowfax", re.compile(r"\b(SHADOWFAX\w*|SF\d{10,}|SFX)\b", re.I)),
+    ("Xpressbees", re.compile(r"\b(XPRESS\s*BEES|XPRESSBEES|13409\d{9,}|XB)\b", re.I)),
+    ("Delhivery", re.compile(r"\bDELHIVERY(?:\s+(?:SURFACE|EXPRESS|AIR))?\b", re.I)),
+    ("Ekart", re.compile(r"\b(EKART(?:\s+LOGISTICS)?|E\-KART)\b", re.I)),
+    ("Ecom Express", re.compile(r"\b(ECOM\s+EXPRESS|ECOM)\b", re.I)),
+    ("Blue Dart", re.compile(r"\b(BLUE\s*DART|BLUEDART)\b", re.I)),
+    ("DTDC", re.compile(r"\bDTDC(?:\s+EXPRESS)?\b", re.I)),
+    ("Amazon Shipping", re.compile(r"\bAMAZON\s+SHIPPING\b", re.I)),
 ]
 
 
@@ -62,21 +69,19 @@ class CourierSorterService:
 
         Returns (canonical_courier_name, confidence).
         """
-        if not text and not header_text:
+        target = header_text or text
+        if not target:
             return "Unassigned", 0.0
 
-        # Prioritize header text if available
-        if header_text:
-            for courier_name, patterns in COMPILED_COURIER_PATTERNS:
-                for pattern in patterns:
-                    if pattern.search(header_text):
-                        return courier_name, 0.95
+        for name, regex in FAST_COURIER_CHECKS:
+            if regex.search(target):
+                return name, 0.95
 
-        # Check full text
-        for courier_name, patterns in COMPILED_COURIER_PATTERNS:
-            for pattern in patterns:
-                if pattern.search(text):
-                    return courier_name, 0.85
+        # If header_text was checked and matched nothing, fallback to text
+        if header_text and text and header_text != text:
+            for name, regex in FAST_COURIER_CHECKS:
+                if regex.search(text):
+                    return name, 0.85
 
         return "Unassigned", 0.0
 

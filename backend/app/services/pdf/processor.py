@@ -80,6 +80,7 @@ class PDFBatchProcessor:
                 try:
                     with open(disk_file_path, "wb") as f_out:
                         f_out.write(raw_bytes)
+                    del raw_bytes  # Immediate free memory
                     src_doc = fitz.open(str(disk_file_path))
                     open_docs[filename] = src_doc
                 except Exception as e:
@@ -252,8 +253,12 @@ class PDFBatchProcessor:
                 # Original input order
                 sorted_labels = sorted(candidate_labels, key=lambda x: x.get("original_index", 0))
 
-            # 5. Generate Target 4x6 Thermal PDF
+            # 5. Generate Target 4x6 Thermal PDF (O(1) dictionary mapped)
             output_doc = fitz.open()
+            rec_map = {
+                (pr.input_filename, pr.page_number): pr
+                for pr in page_records
+            }
             for idx, label_info in enumerate(sorted_labels):
                 src_doc = open_docs[label_info["filename"]]
                 pdf_cropper_service.place_label_on_thermal_page(
@@ -262,13 +267,9 @@ class PDFBatchProcessor:
                     crop_box=label_info["crop_box"],
                     target_doc=output_doc,
                 )
-                # Map output page index back to record
-                for pr in page_records:
-                    if (
-                        pr.input_filename == label_info["filename"]
-                        and pr.page_number == (label_info["pno"] + 1)
-                    ):
-                        pr.output_page_index = idx + 1
+                matched_rec = rec_map.get((label_info["filename"], label_info["pno"] + 1))
+                if matched_rec:
+                    matched_rec.output_page_index = idx + 1
 
             total_labels_generated = len(output_doc)
             if total_labels_generated == 0:

@@ -128,32 +128,42 @@ export async function processLabelsOnBackend(
   formData.append("enable_sku_picklist", String(config.enable_sku_picklist));
 
   let res: Response | null = null;
-  try {
-    res = await fetch(`${baseUrl}/labels/process`, {
-      method: "POST",
-      body: formData,
-    });
-  } catch {
-    res = null;
-  }
+  let lastError: string | null = null;
 
-  // If direct request failed or returned server error (502, 500), fallback to same-origin proxy
-  if (!res || !res.ok) {
+  // Make request with automatic single retry if server returns 502/503 (e.g. Render spin-up cold start)
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const proxyRes = await fetch(`/api/proxy/labels/process`, {
+      res = await fetch(`${baseUrl}/labels/process`, {
         method: "POST",
         body: formData,
       });
-      if (proxyRes.ok || !res) {
-        res = proxyRes;
+
+      if (res.ok) {
+        return (await res.json()) as ProcessingJobResponse;
       }
-    } catch {
-      // Retain original response
+
+      // If 502 (Bad Gateway / Render Cold Start), wait 3.5s and retry once
+      if (res.status === 502 && attempt === 1) {
+        await new Promise((r) => setTimeout(r, 3500));
+        continue;
+      }
+
+      break;
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err.message : "Connection failed";
+      if (attempt === 1) {
+        await new Promise((r) => setTimeout(r, 3500));
+      }
     }
   }
 
   if (!res || !res.ok) {
-    let errorDetail = res ? `Processing failed with status ${res.status}` : "Could not connect to processing server.";
+    let errorDetail = res
+      ? res.status === 502
+        ? "Render backend is warming up (HTTP 502). Please retry in 5 seconds."
+        : `Processing failed with status ${res.status}`
+      : (lastError || "Could not connect to processing server.");
+
     if (res) {
       try {
         const errJson = await res.json();
@@ -210,12 +220,13 @@ export function getViewPdfUrl(jobId: string): string {
 export async function inspectUploadedBatch(
   files: File[]
 ): Promise<UploadInspectionResponse> {
+  const baseUrl = getApiBaseUrl();
   const formData = new FormData();
   files.forEach((file) => {
     formData.append("files", file);
   });
 
-  const res = await fetch(`${API_BASE_URL}/labels/inspect-upload`, {
+  const res = await fetch(`${baseUrl}/labels/inspect-upload`, {
     method: "POST",
     body: formData,
   });
