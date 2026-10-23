@@ -15,5 +15,11 @@ export const metadata: Metadata = {
 };
 
 export default function MeeshoPage() {
-  return <CropLabelsPage />;
+  return (
+    <CropLabelsPage
+      platformName="Meesho"
+      platformTitle="Crop Meesho Labels"
+      platformSubtitle="Upload your PDF to automatically crop labels and organize by Main SKU & Courier Partner."
+    />
+  );
 }

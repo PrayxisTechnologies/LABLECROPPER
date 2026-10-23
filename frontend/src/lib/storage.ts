@@ -39,6 +39,9 @@ export function loadSavedConfig(): ProcessingConfig {
         typeof parsed.enable_sku_picklist === "boolean"
           ? parsed.enable_sku_picklist
           : DEFAULT_CONFIG.enable_sku_picklist,
+      excluded_main_skus: Array.isArray(parsed.excluded_main_skus) ? parsed.excluded_main_skus : [],
+      excluded_skus: Array.isArray(parsed.excluded_skus) ? parsed.excluded_skus : [],
+      excluded_couriers: Array.isArray(parsed.excluded_couriers) ? parsed.excluded_couriers : [],
     };
   } catch {
     return DEFAULT_CONFIG;

@@ -24,17 +24,17 @@ export const FileList: React.FC<FileListProps> = ({
   const totalBytes = files.reduce((acc, curr) => acc + curr.size, 0);
 
   return (
-    <div className="w-full bg-navy-850 rounded-2xl border border-navy-700/80 p-5 sm:p-6 shadow-card space-y-4">
+    <div className="w-full bg-white dark:bg-navy-850 rounded-2xl border border-slate-200 dark:border-navy-700/80 p-5 sm:p-6 shadow-sm dark:shadow-card space-y-4 transition-colors">
       {/* List Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-navy-700/60">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-navy-700/60">
         <div className="flex items-center space-x-2">
-          <h3 className="font-semibold text-white text-base">
+          <h3 className="font-semibold text-slate-900 dark:text-white text-base">
             Selected Batch Documents
           </h3>
-          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-cyan-neon/15 text-cyan-neon border border-cyan-neon/30">
+          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-cyan-50 dark:bg-cyan-neon/15 text-cyan-600 dark:text-cyan-neon border border-cyan-200 dark:border-cyan-neon/30">
             {files.length} {files.length === 1 ? "PDF" : "PDFs"}
           </span>
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
             ({formatBytes(totalBytes)} total)
           </span>
         </div>
@@ -43,7 +43,7 @@ export const FileList: React.FC<FileListProps> = ({
           type="button"
           onClick={onClearAll}
           disabled={disabled}
-          className="text-xs text-slate-400 hover:text-rose-400 transition-colors disabled:opacity-50"
+          className="text-xs text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 transition-colors disabled:opacity-50"
         >
           Clear all
         </button>
@@ -54,11 +54,11 @@ export const FileList: React.FC<FileListProps> = ({
         {files.map((item) => (
           <div
             key={item.id}
-            className="flex items-center justify-between p-3.5 rounded-xl bg-navy-900/90 border border-navy-700/60 hover:border-navy-600 transition-all group"
+            className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-navy-900/90 border border-slate-200 dark:border-navy-700/60 hover:border-slate-300 dark:hover:border-navy-600 transition-all group"
           >
             {/* File Info */}
             <div className="flex items-center space-x-3.5 min-w-0 flex-1 mr-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-950/40 border border-red-500/30 flex items-center justify-center text-red-400">
+              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-500/30 flex items-center justify-center text-red-500 dark:text-red-400">
                 <svg
                   className="w-5 h-5"
                   viewBox="0 0 24 24"
@@ -77,22 +77,22 @@ export const FileList: React.FC<FileListProps> = ({
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-white truncate" title={item.name}>
+                <p className="text-sm font-medium text-slate-900 dark:text-white truncate" title={item.name}>
                   {item.name}
                 </p>
-                <div className="flex items-center space-x-2 text-xs text-slate-400 mt-0.5">
+                <div className="flex items-center space-x-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                   <span>{item.formattedSize}</span>
                   {item.pageCount !== undefined && item.pageCount > 0 && (
                     <>
                       <span>•</span>
-                      <span className="text-cyan-neon font-medium">
+                      <span className="text-cyan-600 dark:text-cyan-neon font-medium">
                         {item.pageCount} {item.pageCount === 1 ? "page" : "pages"}
                       </span>
                     </>
                   )}
                   <span>•</span>
-                  <span className="text-emerald-400/90 flex items-center space-x-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center space-x-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 inline-block" />
                     <span>Ready</span>
                   </span>
                 </div>
@@ -105,7 +105,7 @@ export const FileList: React.FC<FileListProps> = ({
               onClick={() => onRemoveFile(item.id)}
               disabled={disabled}
               title={`Remove ${item.name}`}
-              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 border border-transparent hover:border-rose-500/30 transition-all flex-shrink-0 disabled:opacity-50"
+              className="p-2 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-950/30 border border-transparent hover:border-rose-200 dark:hover:border-rose-500/30 transition-all flex-shrink-0 disabled:opacity-50"
             >
               <svg
                 className="w-4 h-4"

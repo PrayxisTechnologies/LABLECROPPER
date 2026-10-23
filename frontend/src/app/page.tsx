@@ -18,6 +18,7 @@ import {
   checkBackendHealth,
   processLabelsOnBackend,
 } from "@/lib/api";
+import { apiResolveAmbiguity } from "@/lib/api-auth";
 import { DEFAULT_CONFIG, loadSavedConfig, saveUserConfig } from "@/lib/storage";
 
 export default function HomePage() {
@@ -170,21 +171,34 @@ export default function HomePage() {
     }
   };
 
-  const scrollToHowItWorks = () => {
-    const el = document.getElementById("how-it-works");
+  const scrollToFeatures = () => {
+    const el = document.getElementById("features");
     if (el) {
       el.scrollIntoView({ behavior: "smooth" });
     }
   };
 
-  const handleApplyNewSort = (newSort: SortOption) => {
+  const handleUpdateBatch = ({
+    sort,
+    excluded_main_skus,
+    excluded_skus,
+    excluded_couriers,
+  }: {
+    sort: SortOption;
+    excluded_main_skus: string[];
+    excluded_skus: string[];
+    excluded_couriers: string[];
+  }) => {
     const updatedConfig: ProcessingConfig = {
       ...processingConfig,
-      sort_by: newSort,
+      sort_by: sort,
       enable_sku_picklist:
-        newSort === "sku" || newSort === "sku_courier"
+        sort === "sku" || sort === "sku_courier"
           ? true
           : processingConfig.enable_sku_picklist,
+      excluded_main_skus,
+      excluded_skus,
+      excluded_couriers,
     };
     setProcessingConfig(updatedConfig);
     saveUserConfig(updatedConfig);
@@ -204,6 +218,41 @@ export default function HomePage() {
     );
   };
 
+  const handleConfirmSku = async ({
+    oldSku,
+    newSku,
+    keyword,
+  }: {
+    oldSku: string;
+    newSku: string;
+    keyword: string;
+  }) => {
+    if (!processingResult) return;
+    setIsProcessing(true);
+    setErrorMessage(null);
+
+    try {
+      const resolution = {
+        raw_product_text: oldSku,
+        chosen_sku: newSku,
+        matching_keyword: keyword || oldSku,
+        remember_rule: true,
+        job_id: processingResult.job_id,
+      };
+
+      const updated = await apiResolveAmbiguity(processingResult.job_id, [resolution]);
+      setProcessingResult(updated);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Failed to confirm and update SKU.";
+      setErrorMessage(msg);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleResetBatch = () => {
     setProcessingResult(null);
     setFiles([]);
@@ -211,7 +260,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-navy-900 text-white flex flex-col justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-navy-900 text-slate-900 dark:text-white flex flex-col justify-between transition-colors duration-200">
       {/* 1. Shared Navbar */}
       <Header
         backendOnline={backendOnline}
@@ -238,7 +287,7 @@ export default function HomePage() {
       {/* Active Processing Result: Full-Page Workspace + Top Summary with Live Re-Sort */}
       {processingResult ? (
         <div className="w-full flex-1 flex flex-col px-2 sm:px-4 lg:px-8 py-2 space-y-4 animate-in fade-in duration-200">
-          {/* Top: Instant SKU & Delivery Partner Summary with Direct Sort Controls */}
+          {/* Top: Instant SKU & Delivery Partner Summary with Direct Sort & Edit Controls */}
           <UploadSummaryCard
             data={{
               total_files: processingResult.total_files,
@@ -249,8 +298,12 @@ export default function HomePage() {
               all_skus: processingResult.all_skus || [],
             }}
             currentSort={processingConfig.sort_by as SortOption}
-            onApplySort={handleApplyNewSort}
             isReSorting={isProcessing}
+            activeExcludedMainSkus={processingConfig.excluded_main_skus || []}
+            activeExcludedSkus={processingConfig.excluded_skus || []}
+            activeExcludedCouriers={processingConfig.excluded_couriers || []}
+            onUpdateBatch={handleUpdateBatch}
+            onConfirmSku={handleConfirmSku}
           />
 
           {/* Complete In-Browser 4×6 Label Workspace */}
@@ -273,14 +326,14 @@ export default function HomePage() {
                 <span>#1 Meesho Label Cropper Online</span>
               </div>
 
-              <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
+              <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight">
                 Meesho Shipping Label Cropper,{" "}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-neon via-cyan-dim to-purple-brand">
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-600 via-cyan-dim to-purple-brand dark:from-cyan-neon dark:via-cyan-dim dark:to-purple-brand">
                   Ready to Print
                 </span>
               </h1>
 
-              <p className="text-base sm:text-lg text-slate-300 max-w-xl leading-relaxed">
+              <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 max-w-xl leading-relaxed">
                 Free online Meesho label cropper. Crop Meesho PDF labels to 4×6 thermal printer size, safely remove tax invoices, and group orders by SKU & Delivery Partner (Valmo, Shadowfax, Xpressbees).
               </p>
 
@@ -308,10 +361,10 @@ export default function HomePage() {
 
                 <button
                   type="button"
-                  onClick={scrollToHowItWorks}
-                  className="px-5 py-3 rounded-xl bg-navy-850 hover:bg-navy-800 text-slate-300 hover:text-white border border-navy-700 text-sm font-semibold transition-colors"
+                  onClick={scrollToFeatures}
+                  className="px-5 py-3 rounded-xl bg-slate-200 dark:bg-navy-850 hover:bg-slate-300 dark:hover:bg-navy-800 text-slate-800 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white border border-slate-300 dark:border-navy-700 text-sm font-semibold transition-colors"
                 >
-                  How It Works
+                  Features & Details
                 </button>
               </div>
             </div>
@@ -505,21 +558,21 @@ export default function HomePage() {
           <section
             id="features"
             aria-label="Core Benefits"
-            className="pt-6 border-t border-navy-700/60"
+            className="pt-6 border-t border-slate-200 dark:border-navy-700/60"
           >
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* Benefit 1 */}
-              <div className="p-5 rounded-2xl bg-navy-850/80 border border-navy-700/70 space-y-2.5">
-                <div className="w-10 h-10 rounded-xl bg-cyan-neon/15 border border-cyan-neon/30 flex items-center justify-center text-cyan-neon">
+              <div className="p-5 rounded-2xl bg-white dark:bg-navy-850/80 border border-slate-200 dark:border-navy-700/70 shadow-sm dark:shadow-none space-y-2.5 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-cyan-50 dark:bg-cyan-neon/15 border border-cyan-200 dark:border-cyan-neon/30 flex items-center justify-center text-cyan-600 dark:text-cyan-neon">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M6 2v14a2 2 0 0 0 2 2h14" />
                     <path d="M18 22V8a2 2 0 0 0-2-2H2" />
                   </svg>
                 </div>
-                <h3 className="text-base font-bold text-white">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Smart label cropping
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   Automatically isolates shipping labels from tax invoices and
                   extra margins. Never crops barcodes, QR codes, or essential
                   routing addresses.
@@ -527,8 +580,8 @@ export default function HomePage() {
               </div>
 
               {/* Benefit 2 */}
-              <div className="p-5 rounded-2xl bg-navy-850/80 border border-navy-700/70 space-y-2.5">
-                <div className="w-10 h-10 rounded-xl bg-purple-brand/15 border border-purple-brand/30 flex items-center justify-center text-purple-300">
+              <div className="p-5 rounded-2xl bg-white dark:bg-navy-850/80 border border-slate-200 dark:border-navy-700/70 shadow-sm dark:shadow-none space-y-2.5 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-purple-50 dark:bg-purple-brand/15 border border-purple-200 dark:border-purple-brand/30 flex items-center justify-center text-purple-600 dark:text-purple-300">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <line x1="8" y1="6" x2="21" y2="6" />
                     <line x1="8" y1="12" x2="21" y2="12" />
@@ -538,10 +591,10 @@ export default function HomePage() {
                     <line x1="3" y1="18" x2="3.01" y2="18" />
                   </svg>
                 </div>
-                <h3 className="text-base font-bold text-white">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Optional SKU & courier sorting
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   Group labels by product SKU, delivery partner (Delhivery,
                   Shadowfax, Ekart, etc.), or both. Includes consolidated SKU
                   picklists.
@@ -549,18 +602,18 @@ export default function HomePage() {
               </div>
 
               {/* Benefit 3 */}
-              <div className="p-5 rounded-2xl bg-navy-850/80 border border-navy-700/70 space-y-2.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <div className="p-5 rounded-2xl bg-white dark:bg-navy-850/80 border border-slate-200 dark:border-navy-700/70 shadow-sm dark:shadow-none space-y-2.5 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-500/15 border border-emerald-200 dark:border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="6 9 6 2 18 2 18 9" />
                     <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
                     <rect x="6" y="14" width="12" height="8" />
                   </svg>
                 </div>
-                <h3 className="text-base font-bold text-white">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Print-ready 4×6 PDF
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   Produces standard 4 × 6 inch (288 × 432 pt) direct thermal vector
                   pages. Sharp barcodes, zero pixelation, ready for thermal
                   printers.
@@ -568,89 +621,29 @@ export default function HomePage() {
               </div>
             </div>
           </section>
-
-          {/* Short Three-Step How It Works Section */}
-          <section
-            id="how-it-works"
-            aria-label="How It Works Instructions"
-            className="pt-6 border-t border-navy-700/60 space-y-6"
-          >
-            <div className="space-y-1">
-              <h2 className="text-xl sm:text-2xl font-bold text-white">
-                How It Works (Meesho, Flipkart, Amazon & More)
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-400">
-                Three simple steps to transform raw marketplace downloads into
-                print-ready 4×6 thermal labels.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              {/* Step 1 */}
-              <div className="p-5 rounded-2xl bg-navy-900/90 border border-navy-700/60 space-y-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-6 h-6 rounded-full bg-cyan-neon/20 border border-cyan-neon/40 text-cyan-neon text-xs font-bold flex items-center justify-center">
-                    1
-                  </span>
-                  <h4 className="font-bold text-white text-sm">Upload Seller PDF</h4>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Drag and drop order manifests downloaded from your Meesho, Flipkart,
-                  or Amazon seller portal containing labels and customer invoices.
-                </p>
-              </div>
-
-              {/* Step 2 */}
-              <div className="p-5 rounded-2xl bg-navy-900/90 border border-navy-700/60 space-y-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-6 h-6 rounded-full bg-cyan-neon/20 border border-cyan-neon/40 text-cyan-neon text-xs font-bold flex items-center justify-center">
-                    2
-                  </span>
-                  <h4 className="font-bold text-white text-sm">Sort by Courier & SKU</h4>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Keep standard 1-click defaults or sort by delivery partner
-                  (Valmo, Shadowfax, Ekart, Delhivery) and Main SKU for fast packing.
-                </p>
-              </div>
-
-              {/* Step 3 */}
-              <div className="p-5 rounded-2xl bg-navy-900/90 border border-navy-700/60 space-y-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-6 h-6 rounded-full bg-cyan-neon/20 border border-cyan-neon/40 text-cyan-neon text-xs font-bold flex items-center justify-center">
-                    3
-                  </span>
-                  <h4 className="font-bold text-white text-sm">1-Click 4×6 Thermal Print</h4>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Review the exact 288×432 pt thermal vector preview in your browser
-                  and print directly to TVS, TSC, Zebra, or Rollo printers with crisp barcodes.
-                </p>
-              </div>
-            </div>
-          </section>
         </main>
       )}
 
-      {/* AdSense & SEO Compliant Footer */}
+      {/* Footer */}
       {!processingResult && (
-        <footer className="border-t border-navy-700/60 bg-navy-950/80 px-4 sm:px-8 py-6 mt-12">
-          <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-slate-400">
+        <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-6 mt-12 transition-colors">
+          <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
             <div className="flex items-center space-x-2">
-              <span className="font-semibold text-white">LabelFlow</span>
+              <span className="font-bold text-slate-800 dark:text-white">LabelFlow</span>
               <span>•</span>
-              <span>Universal 4×6 Thermal Shipping Label Cropper</span>
+              <span>Universal 4×6 Thermal Shipping Label Cropper by Prayxis</span>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-4">
-              <a href="/blogs" className="hover:text-cyan-neon transition-colors">Blogs & Guides</a>
-              <a href="/how-it-works" className="hover:text-cyan-neon transition-colors">How It Works</a>
-              <a href="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</a>
-              <a href="/terms-of-service" className="hover:text-white transition-colors">Terms of Service</a>
-              <a href="/contact" className="hover:text-white transition-colors">Contact Support</a>
+              <a href="/features" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Features</a>
+              <a href="/blogs" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Blogs & Guides</a>
+              <a href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</a>
+              <a href="/terms-of-service" className="hover:text-slate-900 dark:hover:text-white transition-colors">Terms of Service</a>
+              <a href="/contact" className="hover:text-slate-900 dark:hover:text-white transition-colors">Contact Support</a>
             </div>
           </div>
         </footer>
       )}
+
     </div>
   );
 }

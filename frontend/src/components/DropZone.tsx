@@ -32,7 +32,6 @@ export const DropZone: React.FC<DropZoneProps> = ({
   const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    // Only set to false if leaving the parent container
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setIsDragging(false);
   };
@@ -73,7 +72,6 @@ export const DropZone: React.FC<DropZoneProps> = ({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     processFileList(e.target.files);
-    // Reset file input value so re-selecting same file triggers change
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -105,8 +103,8 @@ export const DropZone: React.FC<DropZoneProps> = ({
       onDrop={handleDrop}
       className={`relative w-full rounded-2xl border-2 border-dashed transition-all duration-200 cursor-pointer p-8 sm:p-12 text-center group ${
         isDragging
-          ? "border-cyan-neon bg-cyan-neon/10 shadow-glow scale-[1.008]"
-          : "border-navy-700 bg-navy-850/70 hover:border-cyan-neon/50 hover:bg-navy-800/80"
+          ? "border-cyan-neon bg-cyan-50 dark:bg-cyan-neon/10 shadow-glow scale-[1.008]"
+          : "border-slate-300 dark:border-navy-700 bg-white/80 dark:bg-navy-850/70 hover:border-cyan-500 dark:hover:border-cyan-neon/50 hover:bg-slate-50 dark:hover:bg-navy-800/80 shadow-sm dark:shadow-none"
       } ${disabled ? "opacity-50 pointer-events-none cursor-not-allowed" : ""}`}
     >
       <input
@@ -125,7 +123,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
           className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all duration-300 ${
             isDragging
               ? "bg-cyan-neon/30 text-cyan-neon shadow-glow"
-              : "bg-navy-800 text-slate-300 group-hover:text-cyan-neon group-hover:bg-cyan-neon/10 group-hover:scale-105"
+              : "bg-slate-100 dark:bg-navy-800 text-slate-600 dark:text-slate-300 group-hover:text-cyan-600 dark:group-hover:text-cyan-neon group-hover:bg-cyan-50 dark:group-hover:bg-cyan-neon/10 group-hover:scale-105"
           }`}
         >
           <svg
@@ -145,23 +143,23 @@ export const DropZone: React.FC<DropZoneProps> = ({
 
         {/* Text Content */}
         <div>
-          <h3 className="text-lg sm:text-xl font-semibold text-white tracking-tight">
+          <h3 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white tracking-tight">
             Drop your Meesho shipping label PDFs here
           </h3>
-          <p className="text-sm text-slate-400 mt-1.5">
-            or <span className="text-cyan-neon font-medium underline underline-offset-4">browse files</span> from your computer
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5">
+            or <span className="text-cyan-600 dark:text-cyan-neon font-medium underline underline-offset-4">browse files</span> from your computer
           </p>
         </div>
 
         {/* File Specifications & Limits */}
-        <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-xs text-slate-400">
-          <span className="px-2.5 py-1 rounded-md bg-navy-900 border border-navy-700 font-mono">
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-xs text-slate-500 dark:text-slate-400">
+          <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 font-mono">
             *.pdf only
           </span>
-          <span className="px-2.5 py-1 rounded-md bg-navy-900 border border-navy-700">
+          <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-navy-900 border border-slate-200 dark:border-navy-700">
             Multi-file batching supported
           </span>
-          <span className="px-2.5 py-1 rounded-md bg-navy-900 border border-navy-700">
+          <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-navy-900 border border-slate-200 dark:border-navy-700">
             Up to 50 MB per file
           </span>
         </div>

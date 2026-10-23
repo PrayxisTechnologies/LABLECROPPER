@@ -5,6 +5,8 @@ from enum import Enum
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from app.schemas.decision import AmbiguousLabelItem
+
 
 class LabelOutputFormat(str, Enum):
     """Supported output label formats."""
@@ -53,6 +55,18 @@ class ProcessingConfig(BaseModel):
         default=False,
         description="Generate an aggregated warehouse item picklist sheet",
     )
+    excluded_main_skus: List[str] = Field(
+        default_factory=list,
+        description="List of parent Main SKUs to exclude from output PDF (e.g. ['GREEN'])",
+    )
+    excluded_skus: List[str] = Field(
+        default_factory=list,
+        description="List of specific individual SKU variants to exclude from output PDF",
+    )
+    excluded_couriers: List[str] = Field(
+        default_factory=list,
+        description="List of courier partners to exclude from output PDF (e.g. ['Valmo'])",
+    )
 
 
 class ExtractedSKU(BaseModel):
@@ -62,6 +76,8 @@ class ExtractedSKU(BaseModel):
     quantity: int = Field(default=1, description="Unit quantity for this line item")
     description: Optional[str] = Field(None, description="Product title or size attribute if present")
     order_id: Optional[str] = Field(None, description="Associated Meesho Order / Sub-order reference")
+    match_type: Optional[str] = Field(None, description="How the SKU was identified (canonical, keyword, regex, etc.)")
+    confidence: Optional[float] = Field(None, description="Confidence score of the match")
 
 
 class PageProcessingRecord(BaseModel):
@@ -137,6 +153,9 @@ class DownloadLinks(BaseModel):
     thermal_pdf: str = Field(..., description="URL to download combined 4x6 thermal PDF")
     picklist_csv: Optional[str] = Field(None, description="URL to download SKU picklist CSV")
     report_json: str = Field(..., description="URL to download full JSON processing audit")
+    google_drive_folder: Optional[str] = Field(None, description="Direct Google Drive folder link")
+    google_drive_pdf: Optional[str] = Field(None, description="Direct Google Drive PDF link")
+    google_drive_picklist: Optional[str] = Field(None, description="Direct Google Drive picklist CSV link")
 
 
 class ProcessingJobResponse(BaseModel):
@@ -161,6 +180,13 @@ class ProcessingJobResponse(BaseModel):
     picklist_items: List[PicklistItem] = Field(default_factory=list)
     pages: List[PageProcessingRecord] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+
+    # Disambiguation & Smart Intelligence
+    has_ambiguity: bool = Field(default=False, description="True if one or more labels have ambiguous SKU candidates")
+    ambiguous_labels: List[AmbiguousLabelItem] = Field(default_factory=list, description="List of ambiguous labels awaiting confirmation")
+
+    # Formatted Filename (e.g. meesho1prayxis.pdf)
+    formatted_filename: Optional[str] = Field(default=None, description="Custom platform-sequenced output PDF filename")
 
     # Downloads
     downloads: DownloadLinks = Field(..., description="Artifact download endpoints")

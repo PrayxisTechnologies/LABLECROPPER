@@ -1,0 +1,220 @@
+"""MongoDB connection manager and lifecycle hooks using Motor with safe fallback."""
+
+from typing import Any, Optional
+from app.core.config import get_settings
+from app.core.logging import logger
+from app.db.fallback_db import FallbackObjectId, InMemoryDatabase
+
+settings = get_settings()
+
+# Safe optional imports for motor, pymongo, and bson
+try:
+    import pymongo
+    from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+    HAS_MOTOR = True
+except ImportError:
+    pymongo = None
+    AsyncIOMotorClient = None
+    AsyncIOMotorDatabase = None
+    HAS_MOTOR = False
+
+try:
+    from bson import ObjectId as _RealObjectId
+    ObjectId = _RealObjectId
+    HAS_BSON = True
+except ImportError:
+    HAS_BSON = False
+    ObjectId = FallbackObjectId  # type: ignore
+
+_client: Optional[Any] = None
+_database: Optional[Any] = None
+_is_connected: bool = False
+_fallback_db: InMemoryDatabase = InMemoryDatabase()
+
+
+async def init_db() -> None:
+    """Initialize the MongoDB client connection with Windows SSL handling and safe in-memory fallback."""
+    global _client, _database, _is_connected
+
+    if not HAS_MOTOR:
+        logger.warning(
+            "MongoDB drivers ('motor', 'pymongo') are not installed in current Python environment. "
+            "LabelFlow is operating in high-performance in-memory fallback mode."
+        )
+        _is_connected = False
+        _database = _fallback_db
+        return
+
+    if not settings.MONGODB_URI:
+        logger.info("MONGODB_URI is not set. Operating in in-memory fallback mode.")
+        _is_connected = False
+        _database = _fallback_db
+        return
+
+    # Check for certifi to avoid Windows SSL verify failed errors
+    ca_file: Optional[str] = None
+    try:
+        import certifi
+        ca_file = certifi.where()
+    except Exception:
+        ca_file = None
+
+    connection_strategies = [
+        # Strategy 1: Standard connection with certifi CA bundle (if available)
+        {
+            "label": "standard SSL with certifi CA",
+            "kwargs": {
+                "serverSelectionTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+                "connectTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+                **({"tlsCAFile": ca_file} if ca_file else {}),
+            },
+        },
+        # Strategy 2: Allow invalid certificates (handles Windows corporate proxies & antivirus SSL inspection)
+        {
+            "label": "fallback SSL (tlsAllowInvalidCertificates=True)",
+            "kwargs": {
+                "serverSelectionTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+                "connectTimeoutMS": settings.MONGODB_CONNECT_TIMEOUT_MS,
+                "tlsAllowInvalidCertificates": True,
+            },
+        },
+    ]
+
+    last_error: Optional[Exception] = None
+
+    for strat in connection_strategies:
+        try:
+            logger.info("Attempting MongoDB connection (%s)...", strat["label"])
+            test_client = AsyncIOMotorClient(settings.MONGODB_URI, **strat["kwargs"])
+            # Ping database cluster to verify handshake and credentials
+            await test_client.admin.command("ping")
+            _client = test_client
+            _database = _client[settings.MONGODB_DATABASE]
+            _is_connected = True
+            logger.info(
+                "MongoDB connected successfully to cluster database '%s' using %s.",
+                settings.MONGODB_DATABASE,
+                strat["label"],
+            )
+
+            # Ensure collection indexes
+            await _create_indexes(_database)
+            return
+
+        except Exception as e:
+            last_error = e
+            logger.warning("MongoDB strategy '%s' failed: %s", strat["label"], str(e))
+            if _client:
+                try:
+                    _client.close()
+                except Exception:
+                    pass
+                _client = None
+
+    # Both connection strategies failed. Provide diagnostic instructions and activate fallback.
+    error_msg = str(last_error) if last_error else "Connection timed out"
+    logger.warning(
+        "\n"
+        "================================================================================\n"
+        "⚠️  MONGODB CLUSTER CONNECTION NOTICE\n"
+        "Failed to reach MongoDB Atlas cluster: %s\n\n"
+        "👉 HOW TO FIX MONGODB ATLAS ACCESS:\n"
+        "1. Open your MongoDB Atlas Dashboard: https://cloud.mongodb.com\n"
+        "2. In the left sidebar, click 'Network Access' (under Security).\n"
+        "3. Click '+ Add IP Address'.\n"
+        "4. Click 'Allow Access From Anywhere' (0.0.0.0/0) and click 'Confirm'.\n"
+        "5. Wait ~1 minute for Atlas to apply the network rule.\n\n"
+        "👉 CURRENT STATUS:\n"
+        "LabelFlow backend has automatically activated its resilient in-memory database!\n"
+        "Seller accounts, SKUs, and label processing will work seamlessly without errors.\n"
+        "================================================================================",
+        error_msg,
+    )
+
+    _is_connected = False
+    _database = _fallback_db
+
+
+async def _create_indexes(db: Any) -> None:
+    """Create indexes for users, user_skus, sku_decisions, and processing_jobs."""
+    if not HAS_MOTOR or pymongo is None or db is None or db is _fallback_db:
+        return
+
+    try:
+        # Users Collection: unique email
+        await db.users.create_index(
+            [("email", pymongo.ASCENDING)],
+            unique=True,
+            name="idx_users_email_unique",
+        )
+
+        # User SKUs Collection: unique per-user sku_code, keywords search, active filter
+        await db.user_skus.create_index(
+            [("user_id", pymongo.ASCENDING), ("sku_code", pymongo.ASCENDING)],
+            unique=True,
+            name="idx_user_skus_user_sku_code_unique",
+        )
+        await db.user_skus.create_index(
+            [("user_id", pymongo.ASCENDING), ("is_active", pymongo.ASCENDING)],
+            name="idx_user_skus_user_active",
+        )
+        await db.user_skus.create_index(
+            [("user_id", pymongo.ASCENDING), ("keywords", pymongo.ASCENDING)],
+            name="idx_user_skus_user_keywords",
+        )
+
+        # SKU Decisions Collection: user + normalized text
+        await db.sku_decisions.create_index(
+            [
+                ("user_id", pymongo.ASCENDING),
+                ("normalized_product_text", pymongo.ASCENDING),
+            ],
+            name="idx_decisions_user_text",
+        )
+        await db.sku_decisions.create_index(
+            [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)],
+            name="idx_decisions_user_created",
+        )
+
+        # Processing Jobs Collection: user + created_at, job_id
+        await db.processing_jobs.create_index(
+            [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)],
+            name="idx_jobs_user_created",
+        )
+        await db.processing_jobs.create_index(
+            [("job_id", pymongo.ASCENDING)],
+            unique=True,
+            name="idx_jobs_job_id_unique",
+        )
+
+        logger.info("MongoDB indexes verified/created successfully.")
+    except Exception as e:
+        logger.warning("Notice while creating MongoDB indexes: %s", str(e))
+
+
+async def close_db() -> None:
+    """Close the MongoDB client connection gracefully."""
+    global _client, _database, _is_connected
+    if _client is not None:
+        try:
+            logger.info("Closing MongoDB connection...")
+            _client.close()
+        except Exception:
+            pass
+        _client = None
+    _database = _fallback_db
+    _is_connected = False
+    logger.info("MongoDB connection closed.")
+
+
+def get_db() -> Any:
+    """Retrieve the active MongoDB database instance, or the resilient in-memory database."""
+    global _database
+    if _database is None:
+        return _fallback_db
+    return _database
+
+
+def is_db_connected() -> bool:
+    """Return whether real MongoDB cluster is currently connected."""
+    return _is_connected

@@ -52,9 +52,12 @@ COMPILED_ORDER_PATTERNS = [
 ]
 
 RE_SKU_WORD = re.compile(r"\bSKU\b", re.I)
-RE_SKU_COLON = re.compile(r"\bSKU\s*[:\-#]\s*([A-Za-z0-9_\-\.\/]+)", re.I)
+RE_SKU_COLON = re.compile(
+    r"\bSKU\s*(?:Code|Name|ID|No)?\s*[:\-#]\s*([A-Za-z0-9_\-\.\/\s]+?)(?=\s*(?:Size|Qty|Quantity|Color|Order|Sub\s*Order|\n|$))",
+    re.I,
+)
 RE_TABLE_MATCH = re.compile(
-    r"\bSKU\b(?:\s+Size)?(?:\s+Qty)?(?:\s+Color)?(?:\s+Order(?:\s*No\.?)?)?[\s\r\n]+([A-Za-z0-9_\-\.\/]+)",
+    r"\bSKU\b(?:\s+Size)?(?:\s+Qty)?(?:\s+Color)?(?:\s+Order(?:\s*No\.?)?)?[\s\r\n]+([A-Za-z0-9_\-\.\/\s]+?)(?=\s*(?:Size|Qty|Free|One|[SML]\b|XL|XXL|\d{15}|$))",
     re.I,
 )
 RE_KNOWN_PATTERN = re.compile(
@@ -123,21 +126,35 @@ class PicklistGeneratorService:
                 # Case B: Standard Meesho table header (SKU Size Qty Color Order No.)
                 elif idx + 1 < len(lines):
                     next_line = lines[idx + 1]
-                    parts = next_line.split()
-                    if parts:
-                        item_qty = quantity
-                        for p in parts[1:]:
-                            if p.isdigit() and len(p) <= 3:
-                                try:
-                                    item_qty = max(1, int(p))
-                                except ValueError:
-                                    pass
-                                break
-                        for p in reversed(parts):
-                            if len(p) >= 10 and any(c.isdigit() for c in p):
-                                order_id = p
-                                break
-                        add_candidate(parts[0], item_qty)
+
+                    # Extract order ID if present in this line
+                    order_match = re.search(r"\b(\d{15,22}(?:_\d+)?)\b", next_line)
+                    if order_match:
+                        order_id = order_match.group(1)
+
+                    # Extract quantity if present
+                    item_qty = quantity
+                    qty_m = re.search(r"\b(?:Qty|Q)?\s*[:\-]?\s*(\d{1,3})\b", next_line, re.I)
+                    if qty_m:
+                        try:
+                            item_qty = max(1, int(qty_m.group(1)))
+                        except ValueError:
+                            pass
+
+                    # Extract full real SKU string before Size / Qty / Color / Order
+                    # e.g. 'Rospack 80ml 074 Free Size 1 NA 344906827252171584_1' -> 'Rospack 80ml 074'
+                    sku_candidate = re.split(
+                        r"\s+(?:Free\s*Size|One\s*Size|Size\b|\b[SML]\b|\bXL\b|\bXXL\b|\bXXXL\b|\bNA\b|\d+\s*(?:NA|\d{15}))",
+                        next_line,
+                        flags=re.I,
+                    )[0].strip()
+
+                    if sku_candidate and len(sku_candidate) >= 2 and not sku_candidate.isdigit():
+                        add_candidate(sku_candidate, item_qty)
+                    else:
+                        parts = next_line.split()
+                        if parts:
+                            add_candidate(parts[0], item_qty)
 
         # 2. Table regex pattern (works even if lines were space-joined)
         if not extracted_items:

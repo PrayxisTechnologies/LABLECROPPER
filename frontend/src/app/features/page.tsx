@@ -86,20 +86,20 @@ export default function FeaturesPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-navy-900 text-white flex flex-col justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-navy-900 text-slate-900 dark:text-white flex flex-col justify-between transition-colors duration-200">
       <Header />
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8 w-full">
         <div className="space-y-2 text-center max-w-2xl mx-auto">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-neon/10 border border-cyan-neon/30 text-xs font-semibold text-cyan-neon">
+          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-50 dark:bg-cyan-neon/10 border border-cyan-200 dark:border-cyan-neon/30 text-xs font-semibold text-cyan-600 dark:text-cyan-neon">
             <span>Features Overview</span>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-white">
-            Built for High-Volume Meesho Sellers
+          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white">
+            Built for High-Volume Sellers
           </h1>
-          <p className="text-sm text-slate-300 leading-relaxed">
+          <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
             Every feature in LabelFlow is designed to eliminate dispatch friction,
-            reduce paper waste, and prevent warehouse sorting mistakes.
+            reduce paper waste, and prevent warehouse sorting mistakes across Meesho, Flipkart, Amazon, Myntra, and Snapdeal.
           </p>
         </div>
 
@@ -107,33 +107,32 @@ export default function FeaturesPage() {
           {features.map((item, idx) => (
             <div
               key={idx}
-              className="p-6 rounded-2xl bg-navy-850/80 border border-navy-700/80 hover:border-cyan-neon/40 transition-all space-y-3 shadow-card"
+              className="p-6 rounded-2xl bg-white dark:bg-navy-850/80 border border-slate-200 dark:border-navy-700/80 hover:border-cyan-500/50 dark:hover:border-cyan-neon/40 transition-all space-y-3 shadow-sm dark:shadow-card"
             >
               <div className="flex items-center justify-between">
-                <div className="p-2.5 rounded-xl bg-navy-800 border border-navy-700">
+                <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-navy-800 border border-slate-200 dark:border-navy-700">
                   {item.icon}
                 </div>
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-navy-800 text-slate-300 border border-navy-700">
+                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 dark:bg-navy-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-navy-700">
                   {item.tag}
                 </span>
               </div>
-              <h3 className="text-base font-bold text-white leading-snug">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white leading-snug">
                 {item.title}
               </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                 {item.description}
               </p>
             </div>
           ))}
         </div>
 
-        <div className="p-8 rounded-2xl bg-gradient-to-r from-navy-850 via-navy-800 to-navy-850 border border-cyan-neon/30 text-center space-y-4 shadow-glow">
-          <h2 className="text-xl sm:text-2xl font-bold text-white">
+        <div className="p-8 rounded-2xl bg-gradient-to-r from-slate-100 via-white to-slate-100 dark:from-navy-850 dark:via-navy-800 dark:to-navy-850 border border-slate-300 dark:border-cyan-neon/30 text-center space-y-4 shadow-sm dark:shadow-glow">
+          <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
             Ready to generate your 4×6 thermal labels?
           </h2>
-          <p className="text-xs sm:text-sm text-slate-300 max-w-lg mx-auto">
-            Upload your Meesho batch now. Zero sign-up required, instant
-            one-click generation.
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-lg mx-auto">
+            Upload your shipping batch now. Zero sign-up required, instant one-click generation.
           </p>
           <div className="pt-2">
             <Link
@@ -146,13 +145,13 @@ export default function FeaturesPage() {
         </div>
       </main>
 
-      <footer className="border-t border-navy-700/60 bg-navy-950/80 px-4 sm:px-8 py-5 mt-12 text-xs text-slate-400">
+      <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-5 mt-12 text-xs text-slate-500 dark:text-slate-400 transition-colors">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>LabelFlow • Universal E-Commerce Fulfillment System</span>
+          <span>LabelFlow • Universal E-Commerce Fulfillment System by Prayxis</span>
           <div className="flex items-center space-x-4">
-            <Link href="/blogs" className="hover:text-white transition-colors">Blogs</Link>
-            <Link href="/how-it-works" className="hover:text-white transition-colors">How It Works</Link>
-            <Link href="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
+            <Link href="/" className="hover:text-cyan-600 dark:hover:text-white transition-colors">Home</Link>
+            <Link href="/blogs" className="hover:text-cyan-600 dark:hover:text-white transition-colors">Blogs</Link>
+            <Link href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</Link>
           </div>
         </div>
       </footer>

@@ -19,12 +19,15 @@ export interface BackendHealthResponse {
   version: string;
   environment: string;
   timestamp: string;
+  database_connected?: boolean;
   capabilities: {
     pdf_validation: boolean;
     cropping_engine: string;
     courier_sorting: string;
     invoice_filter: string;
     sku_picklist: string;
+    database_connected?: boolean;
+    sku_intelligence?: string;
   };
 }
 
@@ -59,6 +62,9 @@ export interface ProcessingConfig {
   sort_by: SortOption;
   remove_invoice: boolean;
   enable_sku_picklist: boolean;
+  excluded_main_skus?: string[];
+  excluded_skus?: string[];
+  excluded_couriers?: string[];
 }
 
 export interface ExtractedSKU {
@@ -66,6 +72,8 @@ export interface ExtractedSKU {
   quantity: number;
   description?: string;
   order_id?: string;
+  match_type?: string;
+  confidence?: number;
 }
 
 export interface CourierSummary {
@@ -102,6 +110,9 @@ export interface DownloadLinks {
   thermal_pdf: string;
   picklist_csv?: string;
   report_json: string;
+  google_drive_folder?: string;
+  google_drive_pdf?: string;
+  google_drive_picklist?: string;
 }
 
 export interface SubSkuSummary {
@@ -129,6 +140,17 @@ export interface UploadInspectionResponse {
   all_skus: SubSkuSummary[];
 }
 
+export interface AmbiguousLabelItem {
+  label_index: number;
+  filename: string;
+  page_number: number;
+  raw_text_snippet: string;
+  original_sku?: string;
+  detected_candidates: string[];
+  chosen_sku?: string;
+  matching_keyword?: string;
+}
+
 export interface ProcessingJobResponse {
   job_id: string;
   status: "completed" | "partial" | "failed";
@@ -145,5 +167,162 @@ export interface ProcessingJobResponse {
   picklist_items: PicklistItem[];
   pages: PageProcessingRecord[];
   warnings: string[];
+  has_ambiguity?: boolean;
+  ambiguous_labels?: AmbiguousLabelItem[];
   downloads: DownloadLinks;
+}
+
+/* ========================================================
+   USER AUTHENTICATION & PERSONAL SKU DATABASE SCHEMAS
+   ======================================================== */
+
+export interface UserSettings {
+  default_sort_mode: string;
+  default_invoice_removal: boolean;
+  default_picklist: boolean;
+  sku_matching_sensitivity: string;
+  auto_save_to_drive?: boolean;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name?: string;
+  is_active: boolean;
+  settings: UserSettings;
+  created_at: string;
+  last_login_at?: string;
+  google_id?: string;
+  google_picture?: string;
+  google_drive_connected?: boolean;
+  google_drive_folder_url?: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in_minutes: number;
+  user: User;
+}
+
+export interface UserSKU {
+  id: string;
+  user_id: string;
+  sku_code: string;
+  product_name: string;
+  keywords: string[];
+  aliases: string[];
+  priority: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SKUListResponse {
+  items: UserSKU[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface SKUImportResult {
+  imported_count: number;
+  updated_count: number;
+  total_processed: number;
+  errors: string[];
+}
+
+export interface SaveDecisionRequest {
+  raw_product_text: string;
+  chosen_sku: string;
+  matching_keyword?: string;
+  remember_rule: boolean;
+  job_id?: string;
+}
+
+export interface Decision {
+  id: string;
+  user_id: string;
+  raw_product_text: string;
+  normalized_product_text: string;
+  chosen_sku: string;
+  created_at: string;
+}
+
+export interface JobHistoryItem {
+  id: string;
+  job_id: string;
+  status: string;
+  created_at: string;
+  total_files: number;
+  total_labels_generated: number;
+  courier_breakdown: CourierSummary[];
+  main_skus: MainSkuSummary[];
+  downloads: DownloadLinks;
+  google_drive?: {
+    saved?: boolean;
+    folder_url?: string;
+    pdf_drive_url?: string;
+    picklist_drive_url?: string;
+    synced_at?: string;
+  };
+  has_ambiguity: boolean;
+}
+
+export interface JobHistoryResponse {
+  items: JobHistoryItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface GoogleDriveStatus {
+  connected: boolean;
+  email?: string;
+  folder_name?: string;
+  folder_url?: string;
+  auto_save?: boolean;
+}
+
+export interface SaveToDriveResponse {
+  success: boolean;
+  job_id: string;
+  folder_url?: string;
+  pdf_drive_url?: string;
+  picklist_drive_url?: string;
+  message: string;
+}
+
+export interface LabelAppearance {
+  job_id: string;
+  pdf_filename: string;
+  input_filename?: string;
+  page_number: number;
+  created_at: string;
+}
+
+export interface MasterLabelItem {
+  id: string;
+  user_id: string;
+  order_id: string;
+  sku: string;
+  wbl_id?: string | null;
+  courier_partner: string;
+  marketplace: string;
+  appearances: LabelAppearance[];
+  first_processed_at: string;
+  last_processed_at: string;
+}
+
+export interface MasterSheetResponse {
+  items: MasterLabelItem[];
+  total: number;
+  page: number;
+  size: number;
+  unique_orders_count: number;
+  unique_skus_count: number;
+  all_time_total?: number;
+  filtered_total?: number;
+  marketplace_counts?: Record<string, number>;
+  couriers_list: string[];
 }

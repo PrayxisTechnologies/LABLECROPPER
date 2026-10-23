@@ -3,15 +3,18 @@
 import json
 from pathlib import Path
 from typing import List, Optional
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 import fitz  # PyMuPDF
 
+from app.api.deps import get_optional_current_user
 from app.core.config import get_settings
 from app.core.errors import MaxFilesExceededException
 from app.core.logging import logger
+from app.db.mongodb import get_db
 from app.schemas.processing import (
     CourierSummary,
+    ExtractedSKU,
     LabelOutputFormat,
     MainSkuSummary,
     ProcessingConfig,
@@ -30,6 +33,7 @@ from app.services.pdf.inspector import (
 from app.services.pdf.processor import batch_processor
 from app.services.pdf.validator import pdf_validator_service
 from app.services.picklist.generator import picklist_generator_service
+from app.services.sku_intelligence.engine import SKUIntelligenceEngine
 
 router = APIRouter()
 
@@ -46,6 +50,7 @@ async def inspect_uploaded_labels(
         ...,
         description="One or more Meesho PDF documents to inspect before cropping",
     ),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ) -> UploadInspectionResponse:
     """Instantly parse and group SKUs into Main SKUs (e.g. GREEN, BROWN) and summarize couriers before cropping."""
     settings = get_settings()
@@ -61,6 +66,17 @@ async def inspect_uploaded_labels(
             max_files=settings.MAX_UPLOAD_FILES,
             received_count=len(files),
         )
+
+    # Load authenticated user's SKU intelligence if available
+    sku_engine: Optional[SKUIntelligenceEngine] = None
+    if current_user:
+        db = get_db()
+        if db is not None:
+            user_id = str(current_user["_id"])
+            u_skus = await db.user_skus.find({"user_id": user_id, "is_active": True}).to_list(length=2000)
+            u_decisions = await db.sku_decisions.find({"user_id": user_id}).to_list(length=1000)
+            if u_skus:
+                sku_engine = SKUIntelligenceEngine(user_skus=u_skus, user_decisions=u_decisions)
 
     total_pages = 0
     total_labels = 0
@@ -112,6 +128,18 @@ async def inspect_uploaded_labels(
 
             # High-speed SKU extraction
             sku_items, order_id = picklist_generator_service.extract_skus(page_text)
+            if sku_engine:
+                matched_sku, match_type, conf, _, _ = sku_engine.match_label_text(page_text)
+                if matched_sku:
+                    intel_sku = ExtractedSKU(
+                        sku=matched_sku,
+                        quantity=sku_items[0].quantity if sku_items else 1,
+                        order_id=order_id,
+                        match_type=match_type,
+                        confidence=conf,
+                    )
+                    sku_items = [intel_sku]
+
             raw_label_items.append({
                 "courier": courier,
                 "order_id": order_id,
@@ -145,6 +173,19 @@ async def inspect_uploaded_labels(
     )
 
 
+def _parse_exclusion_list(param_val: Optional[str]) -> List[str]:
+    """Parse JSON array or comma-separated string of exclusion identifiers."""
+    if not param_val:
+        return []
+    try:
+        parsed = json.loads(param_val)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    except Exception:
+        pass
+    return [x.strip() for x in param_val.split(",") if x.strip()]
+
+
 @router.post(
     "/labels/process",
     response_model=ProcessingJobResponse,
@@ -173,6 +214,23 @@ async def process_labels(
         default=False,
         description="Compile consolidated SKU picklist CSV (automatically true for SKU sorting)",
     ),
+    excluded_main_skus: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of Main SKUs to exclude from output PDF",
+    ),
+    excluded_skus: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of individual SKU variants to exclude from output PDF",
+    ),
+    excluded_couriers: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of delivery partners to exclude from output PDF",
+    ),
+    marketplace: Optional[str] = Form(
+        default=None,
+        description="Marketplace platform name (Meesho, Flipkart, Amazon, Myntra, Snapdeal)",
+    ),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ) -> ProcessingJobResponse:
     """Execute complete Meesho label cropping, courier sorting, and picklist workflow."""
     settings = get_settings()
@@ -194,10 +252,31 @@ async def process_labels(
         sort_by=sort_by,
         remove_invoice=remove_invoice,
         enable_sku_picklist=enable_sku_picklist,
+        excluded_main_skus=_parse_exclusion_list(excluded_main_skus),
+        excluded_skus=_parse_exclusion_list(excluded_skus),
+        excluded_couriers=_parse_exclusion_list(excluded_couriers),
     )
 
+    # Fetch user's personal SKU database and saved decisions if authenticated
+    user_skus = None
+    user_decisions = None
+    user_id = None
+    if current_user:
+        user_id = str(current_user["_id"])
+        db = get_db()
+        if db is not None:
+            user_skus = await db.user_skus.find({"user_id": user_id, "is_active": True}).to_list(length=2000)
+            user_decisions = await db.sku_decisions.find({"user_id": user_id}).to_list(length=1000)
+
     try:
-        result = await batch_processor.process_batch(files, config)
+        result = await batch_processor.process_batch(
+            files=files,
+            config=config,
+            user_skus=user_skus,
+            user_decisions=user_decisions,
+            user_id=user_id,
+            marketplace=marketplace,
+        )
         return result
     except Exception as exc:
         logger.error("Batch processing failed with error: %s", str(exc), exc_info=True)
@@ -233,10 +312,12 @@ async def download_job_artifact(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Thermal PDF was not generated for this job.",
             )
+        fn_file = job_dir / "formatted_name.txt"
+        pdf_name = fn_file.read_text(encoding="utf-8").strip() if fn_file.exists() else f"labels_{job_id}.pdf"
         return FileResponse(
             path=str(file_path),
             media_type="application/pdf",
-            filename=f"meesho_thermal_4x6_{job_id}.pdf",
+            filename=pdf_name,
         )
 
     elif artifact_type == "picklist":
@@ -331,10 +412,12 @@ async def view_job_pdf(job_id: str):
             detail="Thermal PDF was not generated or has expired for this job.",
         )
 
+    fn_file = file_path.parent / "formatted_name.txt"
+    inline_name = fn_file.read_text(encoding="utf-8").strip() if fn_file.exists() else f"labels_{job_id}.pdf"
     return FileResponse(
         path=str(file_path),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="meesho_thermal_4x6_{job_id}.pdf"'},
+        headers={"Content-Disposition": f'inline; filename="{inline_name}"'},
     )
 
 

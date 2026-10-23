@@ -7,6 +7,7 @@ import { FileList } from "@/components/FileList";
 import { AdvancedOptions } from "@/components/AdvancedOptions";
 import { LabelPreviewer } from "@/components/LabelPreviewer";
 import { UploadSummaryCard } from "@/components/UploadSummaryCard";
+import { AmbiguityResolverModal } from "@/components/AmbiguityResolverModal";
 import {
   UploadedFileItem,
   ProcessingConfig,
@@ -20,7 +21,17 @@ import {
 } from "@/lib/api";
 import { DEFAULT_CONFIG, loadSavedConfig, saveUserConfig } from "@/lib/storage";
 
-export default function CropLabelsPage() {
+interface PlatformCropperProps {
+  platformName?: string;
+  platformTitle?: string;
+  platformSubtitle?: string;
+}
+
+export default function CropLabelsPage({
+  platformName = "Meesho",
+  platformTitle,
+  platformSubtitle,
+}: PlatformCropperProps) {
   const [files, setFiles] = useState<UploadedFileItem[]>([]);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [backendVersion, setBackendVersion] = useState<string>("1.0.0");
@@ -32,6 +43,7 @@ export default function CropLabelsPage() {
 
   const [processingResult, setProcessingResult] =
     useState<ProcessingJobResponse | null>(null);
+  const [showAmbiguityModal, setShowAmbiguityModal] = useState<boolean>(false);
 
   // Load saved preferences on client mount
   useEffect(() => {
@@ -88,8 +100,15 @@ export default function CropLabelsPage() {
     setErrorMessage(null);
 
     try {
-      const response = await processLabelsOnBackend(rawFiles, configToUse);
+      const response = await processLabelsOnBackend(rawFiles, configToUse, platformName);
       setProcessingResult(response);
+      if (
+        response.has_ambiguity &&
+        response.ambiguous_labels &&
+        response.ambiguous_labels.length > 0
+      ) {
+        setShowAmbiguityModal(true);
+      }
       // Update page counts on files if needed
       if (response.total_input_pages > 0) {
         setFiles((prev) =>
@@ -162,14 +181,27 @@ export default function CropLabelsPage() {
     setErrorMessage(null);
   };
 
-  const handleApplyNewSort = (newSort: SortOption) => {
+  const handleUpdateBatch = ({
+    sort,
+    excluded_main_skus,
+    excluded_skus,
+    excluded_couriers,
+  }: {
+    sort: SortOption;
+    excluded_main_skus: string[];
+    excluded_skus: string[];
+    excluded_couriers: string[];
+  }) => {
     const updatedConfig: ProcessingConfig = {
       ...processingConfig,
-      sort_by: newSort,
+      sort_by: sort,
       enable_sku_picklist:
-        newSort === "sku" || newSort === "sku_courier"
+        sort === "sku" || sort === "sku_courier"
           ? true
           : processingConfig.enable_sku_picklist,
+      excluded_main_skus,
+      excluded_skus,
+      excluded_couriers,
     };
     setProcessingConfig(updatedConfig);
     saveUserConfig(updatedConfig);
@@ -191,11 +223,43 @@ export default function CropLabelsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-navy-900 text-white flex flex-col justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-navy-900 text-slate-900 dark:text-white flex flex-col justify-between transition-colors duration-200">
       <Header backendOnline={backendOnline} backendVersion={backendVersion} />
 
       {processingResult ? (
         <div className="w-full flex-1 flex flex-col px-2 sm:px-4 lg:px-8 py-2 space-y-4 animate-in fade-in duration-200">
+          {/* Ambiguity Confirmation Banner */}
+          {processingResult.has_ambiguity &&
+            processingResult.ambiguous_labels &&
+            processingResult.ambiguous_labels.length > 0 && (
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-lg">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-bold text-white">
+                      {processingResult.ambiguous_labels.length} shipping label(s) have multiple candidate SKUs
+                    </h4>
+                    <p className="text-[11px] text-amber-300/80">
+                      Confirm the correct product mapping so your labels are sorted with 100% precision.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAmbiguityModal(true)}
+                  className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-navy-950 font-bold text-xs shadow-md transition-all self-start sm:self-auto"
+                >
+                  Confirm SKUs Now
+                </button>
+              </div>
+            )}
+
           {/* Top: Instant SKU & Delivery Partner Summary with Live Re-Sort Control */}
           <UploadSummaryCard
             data={{
@@ -207,8 +271,11 @@ export default function CropLabelsPage() {
               all_skus: processingResult.all_skus || [],
             }}
             currentSort={processingConfig.sort_by as SortOption}
-            onApplySort={handleApplyNewSort}
             isReSorting={isProcessing}
+            activeExcludedMainSkus={processingConfig.excluded_main_skus || []}
+            activeExcludedSkus={processingConfig.excluded_skus || []}
+            activeExcludedCouriers={processingConfig.excluded_couriers || []}
+            onUpdateBatch={handleUpdateBatch}
           />
 
           {/* Complete In-Browser 4×6 Label Workspace */}
@@ -220,11 +287,12 @@ export default function CropLabelsPage() {
       ) : (
         <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 w-full">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
-              Crop Meesho Labels
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white">
+              {platformTitle || `Crop ${platformName} Labels`}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-300">
-              Upload your PDF to automatically crop labels and organize by Main SKU & Courier Partner.
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+              {platformSubtitle ||
+                `Upload your ${platformName} PDF to automatically crop 4×6 thermal labels and organize by Main SKU & Delivery Partner.`}
             </p>
           </div>
 
@@ -303,16 +371,29 @@ export default function CropLabelsPage() {
         </main>
       )}
 
-      <footer className="border-t border-navy-700/60 bg-navy-950/80 px-4 sm:px-8 py-5 mt-12 text-xs text-slate-400">
+      <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-5 mt-12 text-xs text-slate-500 dark:text-slate-400 transition-colors">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>LabelFlow • 4×6 Thermal Shipping Label Generator</span>
+          <span>LabelFlow • 4×6 Thermal Shipping Label Generator by Prayxis</span>
           <div className="flex items-center space-x-4">
-            <a href="/blogs" className="hover:text-white transition-colors">Blogs</a>
-            <a href="/how-it-works" className="hover:text-white transition-colors">How It Works</a>
-            <a href="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</a>
+            <a href="/features" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Features</a>
+            <a href="/blogs" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Blogs</a>
+            <a href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</a>
           </div>
         </div>
       </footer>
+
+      {/* Ambiguity Confirmation Modal */}
+      {showAmbiguityModal && processingResult && processingResult.ambiguous_labels && (
+        <AmbiguityResolverModal
+          jobId={processingResult.job_id}
+          ambiguousLabels={processingResult.ambiguous_labels}
+          onResolved={(updated) => {
+            setProcessingResult(updated);
+            setShowAmbiguityModal(false);
+          }}
+          onClose={() => setShowAmbiguityModal(false)}
+        />
+      )}
     </div>
   );
 }

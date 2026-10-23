@@ -10,6 +10,17 @@ import {
   UploadInspectionResponse,
 } from "./types";
 
+function getRequestAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("labelflow_jwt_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+  return headers;
+}
+
 /**
  * Dynamic API Base URL resolution:
  * - When in browser on localhost/127.0.0.1 -> targets http://localhost:8000/api/v1 (Local Python backend)
@@ -25,6 +36,8 @@ export function getApiBaseUrl(): string {
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:8000/api/v1";
     }
+    // On production custom domain (EC2 / Nginx reverse proxy), use same-origin /api/v1
+    return `${window.location.origin}/api/v1`;
   }
   return "https://lablecropper.onrender.com/api/v1";
 }
@@ -113,7 +126,8 @@ export async function validateFilesOnBackend(
  */
 export async function processLabelsOnBackend(
   files: File[],
-  config: ProcessingConfig
+  config: ProcessingConfig,
+  marketplace?: string
 ): Promise<ProcessingJobResponse> {
   const baseUrl = getApiBaseUrl();
   const formData = new FormData();
@@ -127,6 +141,20 @@ export async function processLabelsOnBackend(
   formData.append("remove_invoice", String(config.remove_invoice));
   formData.append("enable_sku_picklist", String(config.enable_sku_picklist));
 
+  if (marketplace) {
+    formData.append("marketplace", marketplace);
+  }
+
+  if (config.excluded_main_skus && config.excluded_main_skus.length > 0) {
+    formData.append("excluded_main_skus", JSON.stringify(config.excluded_main_skus));
+  }
+  if (config.excluded_skus && config.excluded_skus.length > 0) {
+    formData.append("excluded_skus", JSON.stringify(config.excluded_skus));
+  }
+  if (config.excluded_couriers && config.excluded_couriers.length > 0) {
+    formData.append("excluded_couriers", JSON.stringify(config.excluded_couriers));
+  }
+
   let res: Response | null = null;
   let lastError: string | null = null;
 
@@ -135,6 +163,8 @@ export async function processLabelsOnBackend(
     try {
       res = await fetch(`${baseUrl}/labels/process`, {
         method: "POST",
+        headers: getRequestAuthHeaders(),
+        credentials: "include",
         body: formData,
       });
 
@@ -215,6 +245,14 @@ export function getViewPdfUrl(jobId: string): string {
 }
 
 /**
+ * URL to download complete 4x6 thermal PDF.
+ */
+export function getDownloadPdfUrl(jobId: string): string {
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}/labels/jobs/${jobId}/download/pdf`;
+}
+
+/**
  * Instantly inspect uploaded PDFs before cropping to extract SKUs and Couriers.
  */
 export async function inspectUploadedBatch(
@@ -228,6 +266,8 @@ export async function inspectUploadedBatch(
 
   const res = await fetch(`${baseUrl}/labels/inspect-upload`, {
     method: "POST",
+    headers: getRequestAuthHeaders(),
+    credentials: "include",
     body: formData,
   });
 

@@ -3,29 +3,30 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+import { useTheme } from "@/lib/theme-context";
 
 interface HeaderProps {
   backendOnline?: boolean | null;
   backendVersion?: string;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  backendOnline,
-  backendVersion,
-}) => {
+export const Header: React.FC<HeaderProps> = () => {
   const pathname = usePathname();
+  const { user, isAuthenticated, logout } = useAuth();
+  const { resolvedTheme, toggleTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [aboutModalOpen, setAboutModalOpen] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  // Clean navigation links without any badges
   const navLinks = [
     { label: "Home", href: "/" },
-    { label: "Meesho", href: "/crop-labels", badge: "Live" },
-    { label: "Flipkart", href: "/flipkart", badge: "Soon" },
-    { label: "Amazon", href: "/amazon", badge: "Soon" },
-    { label: "Myntra", href: "/myntra", badge: "Soon" },
-    { label: "Snapdeal", href: "/snapdeal", badge: "Soon" },
+    { label: "Amazon", href: "/amazon" },
+    { label: "Flipkart", href: "/flipkart" },
+    { label: "Meesho", href: "/crop-labels" },
+    { label: "Myntra", href: "/myntra" },
+    { label: "Snapdeal", href: "/snapdeal" },
     { label: "Features", href: "/features" },
-    { label: "How It Works", href: "/how-it-works" },
     { label: "Blogs", href: "/blogs" },
   ];
 
@@ -37,17 +38,189 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <>
-      <header className="border-b border-navy-700/60 bg-navy-950/85 backdrop-blur-md sticky top-0 z-40 px-4 sm:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          {/* Left: Brand Logo & Title */}
-          <Link
-            href="/"
-            className="flex items-center space-x-3 group transition-transform active:scale-98"
+    <header className="sticky top-0 z-50 w-full transition-colors duration-200 border-b dark:border-navy-700/60 border-slate-200/80 bg-white/90 dark:bg-[#07111F]/90 backdrop-blur-md">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+        
+        {/* Left: Brand Logo & Title */}
+        <Link
+          href="/"
+          className="flex items-center space-x-2.5 sm:space-x-3 group flex-shrink-0 transition-transform active:scale-98"
+        >
+          {/* Official Prayxis Logo */}
+          <div className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden p-0.5 bg-gradient-to-tr from-cyan-neon via-purple-brand to-cyan-400 shadow-[0_0_12px_rgba(0,209,255,0.3)] group-hover:shadow-[0_0_18px_rgba(0,209,255,0.55)] transition-all flex-shrink-0">
+            <div className="w-full h-full rounded-[10px] overflow-hidden bg-navy-950 flex items-center justify-center">
+              <img
+                src="/api/logo"
+                alt="LabelFlow Official Logo"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  if (img.src.indexOf("/api/logo") !== -1) {
+                    img.src = "/logo.png";
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col">
+            <div className="flex items-center space-x-1.5">
+              <span className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-white leading-tight">
+                Label<span className="text-cyan-500 dark:text-cyan-neon">Flow</span>
+              </span>
+            </div>
+            <span className="text-[9px] sm:text-[10px] text-slate-500 dark:text-slate-400 font-medium tracking-wide leading-none">
+              by Prayxis
+            </span>
+          </div>
+        </Link>
+
+        {/* Center: Clean Navigation Links with vertical dot dividers ⋮ */}
+        <nav className="hidden lg:flex items-center space-x-2 sm:space-x-2.5 py-1">
+          {navLinks.map((link, idx) => {
+            const active = isActive(link.href);
+            const isLast = idx === navLinks.length - 1;
+
+            return (
+              <React.Fragment key={link.href}>
+                <Link
+                  href={link.href}
+                  className={`text-sm font-semibold transition-all duration-150 px-2 py-1 rounded-md ${
+                    active
+                      ? "text-cyan-600 dark:text-cyan-neon font-bold drop-shadow-[0_0_8px_rgba(0,209,255,0.35)]"
+                      : "text-slate-600 dark:text-slate-300 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-100/70 dark:hover:bg-navy-800/50"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+
+                {!isLast && (
+                  <span
+                    aria-hidden="true"
+                    className="text-slate-300 dark:text-slate-700 select-none text-xs font-bold px-0.5"
+                  >
+                    ⋮
+                  </span>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </nav>
+
+        {/* Right Section: Sign In FIRST, then Theme Toggle (Clean & No Register Button / No Offline Badge) */}
+        <div className="flex items-center space-x-3 flex-shrink-0">
+          
+          {/* 1. Sign In (or Authenticated User Profile) */}
+          {isAuthenticated && user ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                className="flex items-center space-x-2 px-2.5 py-1.5 rounded-xl border text-xs font-semibold bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800 dark:bg-navy-800/90 dark:border-navy-700 dark:text-slate-200 dark:hover:bg-navy-750 transition-colors"
+              >
+                {user.google_picture ? (
+                  <img
+                    src={user.google_picture}
+                    alt={user.name || "User Avatar"}
+                    className="w-5 h-5 rounded-full object-cover shrink-0"
+                  />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-cyan-neon shadow-[0_0_8px_rgba(0,209,255,0.8)]" />
+                )}
+                <span className="max-w-[120px] truncate">
+                  {user.name || user.email.split("@")[0]}
+                </span>
+                <svg
+                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                    userDropdownOpen ? "rotate-180" : ""
+                  }`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {/* Dropdown Menu */}
+              {userDropdownOpen && (
+                <div
+                  className="absolute right-0 mt-2 w-48 rounded-xl shadow-xl border py-1.5 z-50 bg-white border-slate-200 dark:bg-navy-850 dark:border-navy-700 animate-in fade-in slide-in-from-top-2 duration-150"
+                  onMouseLeave={() => setUserDropdownOpen(false)}
+                >
+                  <div className="px-3 py-1.5 border-b border-slate-100 dark:border-navy-700/60">
+                    <p className="text-[11px] text-slate-400 truncate">{user.email}</p>
+                  </div>
+                  <Link
+                    href="/dashboard"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750"
+                  >
+                    Dashboard
+                  </Link>
+                  <Link
+                    href="/dashboard/skus"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750"
+                  >
+                    My SKUs Database
+                  </Link>
+                  <Link
+                    href="/dashboard/master-sheet"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750 flex items-center justify-between"
+                  >
+                    <span>Master Label Sheet</span>
+                    <span className="text-[10px] text-cyan-neon font-bold">New</span>
+                  </Link>
+                  <Link
+                    href="/dashboard/history"
+                    onClick={() => setUserDropdownOpen(false)}
+                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750 flex items-center justify-between"
+                  >
+                    <span>Processing History</span>
+                    {user.google_drive_connected ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Google Drive Linked" />
+                    ) : (
+                      <span className="text-[10px] text-cyan-neon font-bold">Link Drive</span>
+                    )}
+                  </Link>
+                  <div className="border-t border-slate-100 dark:border-navy-700/60 my-1" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserDropdownOpen(false);
+                      logout();
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-semibold"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 hover:text-cyan-600 dark:hover:text-cyan-neon px-3 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-navy-800/70 transition-colors"
+            >
+              Sign In
+            </Link>
+          )}
+
+          {/* 2. Dark / Bright Mode Toggle placed AFTER Sign In */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={`Active: ${resolvedTheme === "dark" ? "Dark Mode" : "Bright Mode"}. Click to toggle.`}
+            aria-label="Toggle Bright / Dark Mode"
+            className="p-2 rounded-xl border transition-all duration-200 flex items-center justify-center bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700 dark:bg-navy-800/90 dark:border-navy-700 dark:text-amber-400 dark:hover:border-cyan-neon/50 dark:hover:shadow-[0_0_12px_rgba(0,209,255,0.25)] active:scale-95"
           >
-            <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-neon/20 via-purple-brand/25 to-navy-800 border border-cyan-neon/40 shadow-glow group-hover:border-cyan-neon/70 transition-all">
+            {resolvedTheme === "dark" ? (
+              // Sun Icon (Dark -> Bright Mode)
               <svg
-                className="w-5 h-5 text-cyan-neon"
+                className="w-4 h-4 text-amber-400 animate-in spin-in-180 duration-200"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -55,222 +228,89 @@ export const Header: React.FC<HeaderProps> = ({
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M7 7h10" />
-                <path d="M7 12h10" />
-                <path d="M7 17h6" />
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
               </svg>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-lg font-bold tracking-tight text-white leading-tight">
-                Label<span className="text-cyan-neon">Flow</span>
-              </span>
-              <span className="text-[10px] text-slate-400 font-medium tracking-wide">
-                4×6 Thermal Generator
-              </span>
-            </div>
-          </Link>
-
-          {/* Center Navigation Links (Desktop) */}
-          <nav className="hidden lg:flex items-center space-x-1">
-            {navLinks.map((link) => {
-              const active = isActive(link.href);
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={`text-xs font-semibold transition-all duration-150 flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg ${
-                    active
-                      ? "text-cyan-neon bg-cyan-neon/10 border border-cyan-neon/30 shadow-[0_0_12px_rgba(0,209,255,0.15)]"
-                      : "text-slate-300 hover:text-white hover:bg-navy-800/70 border border-transparent"
-                  }`}
-                >
-                  <span>{link.label}</span>
-                  {link.badge && (
-                    <span
-                      className={`text-[9px] px-1 py-0.2 rounded font-extrabold uppercase ${
-                        link.badge === "Live"
-                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
-                          : "bg-purple-brand/20 text-purple-300 border border-purple-brand/30"
-                      }`}
-                    >
-                      {link.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {/* Right Actions: About, Backend Health & Mobile Toggle */}
-          <div className="flex items-center space-x-2.5 sm:space-x-3">
-            {/* About Modal Trigger */}
-            <button
-              type="button"
-              onClick={() => setAboutModalOpen(true)}
-              className="hidden sm:inline-flex items-center text-xs font-medium text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg hover:bg-navy-800/80 transition-colors"
-            >
-              About
-            </button>
-
-            {/* Backend Connectivity Indicator Dot */}
-            {backendOnline !== undefined && (
-              <div
-                className="flex items-center space-x-1.5 px-2 py-1 rounded-md text-[11px] font-medium bg-navy-900 border border-navy-700/80"
-                title={
-                  backendOnline === true
-                    ? `API Online (v${backendVersion || "1.0.0"})`
-                    : backendOnline === false
-                    ? "API Offline (Start FastAPI server at localhost:8000)"
-                    : "Connecting to API..."
-                }
+            ) : (
+              // Moon Icon (Bright -> Dark Mode)
+              <svg
+                className="w-4 h-4 text-slate-700 animate-in spin-in-90 duration-200"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    backendOnline === true
-                      ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)]"
-                      : backendOnline === false
-                      ? "bg-rose-400"
-                      : "bg-slate-500 animate-pulse"
-                  }`}
-                />
-                <span className="hidden lg:inline text-slate-300">
-                  {backendOnline === true
-                    ? "API Active"
-                    : backendOnline === false
-                    ? "API Offline"
-                    : "Connecting..."}
-                </span>
-              </div>
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
             )}
+          </button>
 
-            {/* Mobile Menu Hamburger Button */}
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              aria-label="Toggle navigation menu"
-              className="md:hidden p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-navy-800 transition-colors"
-            >
-              {mobileMenuOpen ? (
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="3" y1="12" x2="21" y2="12" />
-                  <line x1="3" y1="6" x2="21" y2="6" />
-                  <line x1="3" y1="18" x2="21" y2="18" />
-                </svg>
-              )}
-            </button>
-          </div>
+          {/* Mobile Menu Hamburger Button */}
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Toggle navigation menu"
+            className="lg:hidden p-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-navy-800 transition-colors"
+          >
+            {mobileMenuOpen ? (
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            )}
+          </button>
         </div>
+      </div>
 
-        {/* Mobile Dropdown Menu */}
-        {mobileMenuOpen && (
-          <div className="lg:hidden pt-3 pb-2 border-t border-navy-700/60 mt-2 space-y-1">
-            {navLinks.map((link) => {
-              const active = isActive(link.href);
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${
-                    active
-                      ? "text-cyan-neon bg-cyan-neon/10 border border-cyan-neon/30"
-                      : "text-slate-300 hover:text-white hover:bg-navy-800/80"
-                  }`}
-                >
-                  <span>{link.label}</span>
-                  {link.badge && (
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-extrabold uppercase ${
-                        link.badge === "Live"
-                          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
-                          : "bg-purple-brand/20 text-purple-300 border border-purple-brand/30"
-                      }`}
-                    >
-                      {link.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-            <button
-              type="button"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                setAboutModalOpen(true);
-              }}
-              className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-navy-800/80"
-            >
-              About LabelFlow
-            </button>
-          </div>
-        )}
-      </header>
+      {/* Mobile Dropdown Menu */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden border-t dark:border-navy-700/60 border-slate-200 px-4 pt-3 pb-4 space-y-1 bg-white/95 dark:bg-[#07111F]/95 backdrop-blur-md animate-in slide-in-from-top-2 duration-150">
+          {navLinks.map((link) => {
+            const active = isActive(link.href);
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center justify-between px-3 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  active
+                    ? "text-cyan-600 dark:text-cyan-neon bg-cyan-50 dark:bg-cyan-neon/10"
+                    : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-navy-800/80"
+                }`}
+              >
+                <span>{link.label}</span>
+              </Link>
+            );
+          })}
 
-      {/* About Modal */}
-      {aboutModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/80 backdrop-blur-sm animate-in fade-in"
-        >
-          <div className="w-full max-w-md bg-navy-850 rounded-2xl border border-navy-700 p-6 shadow-glow text-white space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-navy-700/60">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-lg bg-cyan-neon/20 border border-cyan-neon/40 flex items-center justify-center text-cyan-neon">
-                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <path d="M7 7h10" />
-                    <path d="M7 12h10" />
-                  </svg>
-                </div>
-                <h3 className="font-bold text-white text-base">About LabelFlow</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAboutModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
+          {!isAuthenticated && (
+            <div className="pt-2 border-t dark:border-navy-700/60 border-slate-200">
+              <Link
+                href="/login"
+                onClick={() => setMobileMenuOpen(false)}
+                className="block text-center py-2.5 rounded-xl border text-xs font-bold text-slate-800 dark:text-slate-200 border-slate-300 dark:border-navy-700 hover:bg-slate-100 dark:hover:bg-navy-800"
               >
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
+                Sign In
+              </Link>
             </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              LabelFlow is a specialized fulfillment utility built for Meesho sellers and dispatch teams. It transforms mixed, multi-page Meesho batch downloads into vector-perfect 4 × 6 inch thermal labels (288 × 432 pt) with zero distortion.
-            </p>
-            <div className="space-y-2 text-xs text-slate-300 bg-navy-900 p-3 rounded-xl border border-navy-700/60">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Target Standard:</span>
-                <span className="font-semibold text-white">4×6 in (288×432 pt)</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Processing Engine:</span>
-                <span className="font-semibold text-white">PyMuPDF Vector Canvas</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Supported Carriers:</span>
-                <span className="font-semibold text-white">Delhivery, Shadowfax, Ekart, Valmo, etc.</span>
-              </div>
-            </div>
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setAboutModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-navy-750 border border-navy-600 text-xs font-semibold text-white hover:bg-navy-700 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
-    </>
+    </header>
   );
 };

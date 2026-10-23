@@ -72,19 +72,19 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
   };
 
   return (
-    <div className="w-full bg-navy-850 rounded-2xl border border-navy-700/80 transition-all shadow-card overflow-hidden">
+    <div className="w-full bg-white dark:bg-navy-850 rounded-2xl border border-slate-200 dark:border-navy-700/80 transition-all shadow-sm dark:shadow-card overflow-hidden">
       {/* Expandable Header */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
         aria-expanded={isOpen}
-        className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-navy-800/60 transition-colors focus:outline-none"
+        className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-slate-50 dark:hover:bg-navy-800/60 transition-colors focus:outline-none"
       >
         <div className="flex items-center space-x-2.5">
           <svg
-            className={`w-4 h-4 text-cyan-neon transition-transform duration-200 ${
-              isOpen ? "rotate-90 text-cyan-neon" : "text-slate-400"
+            className={`w-4 h-4 transition-transform duration-200 ${
+              isOpen ? "rotate-90 text-cyan-600 dark:text-cyan-neon" : "text-slate-400"
             }`}
             viewBox="0 0 24 24"
             fill="none"
@@ -95,34 +95,34 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
           >
             <polyline points="9 18 15 12 9 6" />
           </svg>
-          <span className="text-sm font-semibold text-white">
+          <span className="text-sm font-semibold text-slate-800 dark:text-white">
             Advanced options
           </span>
-          <span className="text-xs text-slate-400 hidden sm:inline">
+          <span className="text-xs text-slate-500 dark:text-slate-400 hidden sm:inline">
             ({getSortLabel(config.sort_by)} •{" "}
             {config.remove_invoice ? "Invoice filter ON" : "Invoice filter OFF"})
           </span>
         </div>
 
-        <span className="text-xs text-cyan-neon hover:underline font-medium">
+        <span className="text-xs text-cyan-600 dark:text-cyan-neon hover:underline font-medium">
           {isOpen ? "Hide options" : "Customize"}
         </span>
       </button>
 
       {/* Collapsed Disclosure Content */}
       {isOpen && (
-        <div className="px-5 pb-5 pt-2 border-t border-navy-700/60 space-y-4 animate-in fade-in duration-150">
+        <div className="px-5 pb-5 pt-2 border-t border-slate-200 dark:border-navy-700/60 space-y-4 animate-in fade-in duration-150">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* A. Remove Extra Content Toggle */}
-            <div className="p-3.5 rounded-xl bg-navy-900/90 border border-navy-700/70 flex items-start justify-between space-x-3">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-navy-900/90 border border-slate-200 dark:border-navy-700/70 flex items-start justify-between space-x-3">
               <div className="space-y-1 pr-2">
                 <label
                   htmlFor="toggle-remove-invoice"
-                  className="text-xs font-semibold text-white block cursor-pointer"
+                  className="text-xs font-semibold text-slate-800 dark:text-white block cursor-pointer"
                 >
                   Remove invoice / extra blank area
                 </label>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Safely removes customer tax invoice and whitespace without
                   cutting barcodes, QR codes, or address info. Ambiguous layouts
                   are preserved for review.
@@ -136,11 +136,11 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
                 onClick={handleInvoiceToggle}
                 disabled={disabled}
                 className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  config.remove_invoice ? "bg-cyan-neon" : "bg-navy-700"
+                  config.remove_invoice ? "bg-cyan-500 dark:bg-cyan-neon" : "bg-slate-300 dark:bg-navy-700"
                 } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
               >
                 <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-navy-950 shadow ring-0 transition duration-200 ease-in-out ${
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white dark:bg-navy-950 shadow ring-0 transition duration-200 ease-in-out ${
                     config.remove_invoice ? "translate-x-5" : "translate-x-0"
                   }`}
                 />
@@ -148,14 +148,14 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
             </div>
 
             {/* B. Organize Labels Selector */}
-            <div className="p-3.5 rounded-xl bg-navy-900/90 border border-navy-700/70 space-y-1.5">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-navy-900/90 border border-slate-200 dark:border-navy-700/70 space-y-1.5">
               <label
                 htmlFor="select-organize-labels"
-                className="text-xs font-semibold text-white block"
+                className="text-xs font-semibold text-slate-800 dark:text-white block"
               >
                 Organize labels by
               </label>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Choose how output 4×6 thermal pages are grouped in the PDF.
               </p>
               <div className="relative pt-1">
@@ -164,7 +164,7 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
                   value={config.sort_by}
                   onChange={handleSortChange}
                   disabled={disabled}
-                  className="w-full appearance-none bg-navy-800 border border-navy-600 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-neon pr-8 cursor-pointer disabled:opacity-50 font-medium"
+                  className="w-full appearance-none bg-white dark:bg-navy-800 border border-slate-300 dark:border-navy-600 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-white focus:outline-none focus:border-cyan-neon pr-8 cursor-pointer disabled:opacity-50 font-medium"
                 >
                   <option value="sku_courier">
                     SKU + Delivery partner (Default — Brown&apos;s Valmo/Shadowfax, then Green)
@@ -191,19 +191,19 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
           </div>
 
           {/* C. Picklist Generation Checkbox */}
-          <div className="p-3.5 rounded-xl bg-navy-900/90 border border-navy-700/70 flex items-start justify-between space-x-3">
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-navy-900/90 border border-slate-200 dark:border-navy-700/70 flex items-start justify-between space-x-3">
             <div className="space-y-1 pr-2">
               <label
                 htmlFor="toggle-picklist"
-                className="text-xs font-semibold text-white block cursor-pointer"
+                className="text-xs font-semibold text-slate-800 dark:text-white block cursor-pointer"
               >
                 Generate SKU picklist CSV
               </label>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                 Aggregates order line items into a warehouse item picking list
                 with unit counts and courier partners.
                 {isSkuSorting && (
-                  <span className="text-cyan-neon ml-1 font-medium">
+                  <span className="text-cyan-600 dark:text-cyan-neon ml-1 font-medium">
                     (Automatically included with SKU sorting)
                   </span>
                 )}
@@ -218,12 +218,12 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
               disabled={disabled || isSkuSorting}
               className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                 config.enable_sku_picklist || isSkuSorting
-                  ? "bg-purple-brand"
-                  : "bg-navy-700"
+                  ? "bg-purple-600 dark:bg-purple-brand"
+                  : "bg-slate-300 dark:bg-navy-700"
               } ${disabled || isSkuSorting ? "cursor-not-allowed opacity-90" : "cursor-pointer"}`}
             >
               <span
-                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-navy-950 shadow ring-0 transition duration-200 ease-in-out ${
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white dark:bg-navy-950 shadow ring-0 transition duration-200 ease-in-out ${
                   config.enable_sku_picklist || isSkuSorting
                     ? "translate-x-5"
                     : "translate-x-0"

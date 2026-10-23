@@ -1,7 +1,7 @@
 """Application configuration settings."""
 
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,25 @@ class Settings(BaseSettings):
     # Storage paths
     STORAGE_DIR: str = "storage"
     JOB_RETENTION_HOURS: int = 24
+
+    # MongoDB Persistent Storage
+    MONGODB_URI: str = "mongodb+srv://prayxistechnologies_db_user:3ELAR327CBt6w8Jy@cluster0.lc8hqsq.mongodb.net/labelflow?retryWrites=true&w=majority"
+    MONGODB_DATABASE: str = "labelflow"
+    MONGODB_CONNECT_TIMEOUT_MS: int = 15000
+
+    # User Authentication & Security
+    AUTH_SECRET_KEY: str = "labelflow-jwt-secret-key-prod-2026-super-secure-token-meesho-cropper"
+    AUTH_ALGORITHM: str = "HS256"
+    AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    AUTH_COOKIE_NAME: str = "labelflow_token"
+    AUTH_COOKIE_SECURE: bool = False  # Set to True in HTTPS production environments
+    AUTH_COOKIE_SAMESITE: str = "lax"
+
+    # Google OAuth2 & Google Drive Integration
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REDIRECT_URI: Optional[str] = None
+    GOOGLE_DRIVE_FOLDER_NAME: str = "LabelFlow - Meesho Labels"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -21,6 +21,7 @@ def test_health_check_success():
     assert data["capabilities"]["courier_sorting"] == "active"
     assert data["capabilities"]["invoice_filter"] == "active"
     assert data["capabilities"]["sku_picklist"] == "active"
+    assert data["capabilities"]["sku_intelligence"] == "active"
 
 
 def test_root_status():

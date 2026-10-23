@@ -127,6 +127,22 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
 
         {/* Right: Actions (Download Ctrl+S, Print Ctrl+P, View Toggle, Close Esc) */}
         <div className="flex items-center space-x-2 sm:space-x-2.5">
+          {/* Google Drive Direct Link (if synced) */}
+          {result.downloads?.google_drive_pdf && (
+            <a
+              href={result.downloads.google_drive_pdf}
+              target="_blank"
+              rel="noreferrer"
+              className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-400 text-xs font-bold transition-colors"
+              title="Open cropped label in your personal Google Drive"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+              </svg>
+              <span>Drive Link</span>
+            </a>
+          )}
+
           {/* Picklist CSV Button (if generated) */}
           {picklistCsvUrl && (
             <a
