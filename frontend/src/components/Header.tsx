@@ -18,16 +18,15 @@ export const Header: React.FC<HeaderProps> = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
-  // Clean navigation links without any badges
+  // Clean navigation links with SEO-friendly targets
   const navLinks = [
     { label: "Home", href: "/" },
+    { label: "Meesho", href: "/meesho-label-cropper" },
+    { label: "Flipkart", href: "/flipkart-label-cropper" },
     { label: "Amazon", href: "/amazon" },
-    { label: "Flipkart", href: "/flipkart" },
-    { label: "Meesho", href: "/crop-labels" },
     { label: "Myntra", href: "/myntra" },
-    { label: "Snapdeal", href: "/snapdeal" },
-    { label: "Features", href: "/features" },
-    { label: "Blogs", href: "/blogs" },
+    { label: "SKU Rules", href: "/dashboard/skus" },
+    { label: "Blogs & Guides", href: "/blogs" },
   ];
 
   const isActive = (href: string) => {

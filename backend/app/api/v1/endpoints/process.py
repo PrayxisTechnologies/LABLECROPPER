@@ -103,9 +103,14 @@ async def inspect_uploaded_labels(
             p_rect = page.rect
             is_meesho_a4 = abs(p_rect.width - 595.0) <= 25.0 and abs(p_rect.height - 842.0) <= 25.0
             
-            # Fast clipped text extraction: Only extract upper 385 pt (shipping label area).
+            # Fast clipped text extraction: Dynamically extract shipping label area up to TAX INVOICE.
             # This completely skips parsing the dense lower tax invoice table, boosting scan speed 5x.
-            clip_box = fitz.Rect(0, 0, p_rect.width, 385.0 if is_meesho_a4 else p_rect.height)
+            crop_limit_y = (
+                pdf_inspector.detect_tax_invoice_separator(page, p_rect.width, p_rect.height) + 10.0
+                if is_meesho_a4
+                else p_rect.height
+            )
+            clip_box = fitz.Rect(0, 0, p_rect.width, crop_limit_y)
             page_text = page.get_text("text", clip=clip_box)
             if not page_text.strip():
                 page_text = page.get_text("text")

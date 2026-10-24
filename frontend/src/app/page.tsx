@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
+import { HomeSeoContent } from "@/components/HomeSeoContent";
 import { DropZone } from "@/components/DropZone";
 import { FileList } from "@/components/FileList";
 import { AdvancedOptions } from "@/components/AdvancedOptions";
@@ -621,28 +623,14 @@ export default function HomePage() {
               </div>
             </div>
           </section>
+
+          {/* Educational & Search-Optimized Content */}
+          <HomeSeoContent />
         </main>
       )}
 
-      {/* Footer */}
-      {!processingResult && (
-        <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-6 mt-12 transition-colors">
-          <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
-            <div className="flex items-center space-x-2">
-              <span className="font-bold text-slate-800 dark:text-white">LabelFlow</span>
-              <span>•</span>
-              <span>Universal 4×6 Thermal Shipping Label Cropper by Prayxis</span>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-4">
-              <a href="/features" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Features</a>
-              <a href="/blogs" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Blogs & Guides</a>
-              <a href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</a>
-              <a href="/terms-of-service" className="hover:text-slate-900 dark:hover:text-white transition-colors">Terms of Service</a>
-              <a href="/contact" className="hover:text-slate-900 dark:hover:text-white transition-colors">Contact Support</a>
-            </div>
-          </div>
-        </footer>
-      )}
+      {/* Global Professional Footer */}
+      <Footer />
 
     </div>
   );

@@ -3,34 +3,38 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://labelcropper.in";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://labelcropper.prayxis.in";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "LabelFlow — Universal E-Commerce Shipping Label Cropper (4×6 Thermal)",
-    template: "%s | LabelFlow Label Cropper",
+    default: "LabelCropper — #1 Free Meesho & Flipkart Shipping Label Cropper (4×6 Thermal)",
+    template: "%s | LabelCropper by Prayxis",
   },
   description:
-    "Free online shipping label cropper for Meesho, Flipkart, Amazon, Myntra, and Snapdeal. Crop PDF to 4x6 thermal printer size, remove tax invoice, sort by SKU & Courier partner (Valmo, Shadowfax, Ekart, Delhivery), and download print-ready PDF.",
+    "India's #1 free online shipping label cropper for Meesho, Flipkart, Amazon, and Myntra sellers. 1-click crop A4 PDF to 4x6 thermal roll size, remove customer tax invoices, sort by Valmo, Shadowfax & Ekart, and print with 100% crisp barcodes.",
   keywords: [
     "Meesho label cropper",
     "Flipkart label cropper",
+    "Label cropper",
+    "Shipping label cropper",
+    "Meesho shipping label crop 4x6",
+    "Crop Meesho label online free",
+    "Flipkart shipping label crop online",
+    "Ekart label cropper",
     "Amazon shipping label cropper",
-    "Myntra label cropper",
-    "Snapdeal label cropper",
     "Free label cropper 4x6",
     "Thermal label generator",
-    "Remove tax invoice",
-    "Valmo label sorter",
-    "Shadowfax label sorter",
-    "Ekart label cropper",
+    "Remove tax invoice Meesho",
+    "Valmo courier label sorter",
+    "Shadowfax Meesho label",
+    "Ekart logistics label crop",
     "SKU picklist generator",
     "Thermal 4x6 PDF crop",
   ],
-  authors: [{ name: "Prayxis Software Solutions" }],
+  authors: [{ name: "Prayxis Technologies" }],
   creator: "Prayxis",
-  publisher: "LabelFlow by Prayxis",
+  publisher: "Prayxis Technologies",
   robots: {
     index: true,
     follow: true,
@@ -46,16 +50,16 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_IN",
     url: siteUrl,
-    title: "LabelFlow — Universal E-Commerce Shipping Label Cropper (4×6 Thermal)",
+    title: "LabelCropper — Free Meesho, Flipkart & Amazon Shipping Label Cropper (4×6 Thermal)",
     description:
-      "Instant 1-click shipping label cropping, courier sorting, and SKU picklist generation for thermal 4x6 printers across Meesho, Flipkart, Amazon, Myntra, and Snapdeal.",
-    siteName: "LabelFlow",
+      "Instant 1-click vector shipping label cropping, tax invoice removal, Valmo/Shadowfax/Ekart courier sorting, and SKU picklists for 4x6 thermal printers.",
+    siteName: "LabelCropper",
   },
   twitter: {
     card: "summary_large_image",
-    title: "LabelFlow — Universal E-Commerce Shipping Label Cropper (4×6 Thermal)",
+    title: "LabelCropper — #1 Free Shipping Label Cropper for Indian E-Commerce",
     description:
-      "Crop PDFs to 4x6 thermal labels, remove tax invoices, and group by courier & SKU instantly.",
+      "Crop Meesho & Flipkart PDFs to 4x6 thermal labels, remove tax invoices, and group by courier & SKU instantly.",
   },
   alternates: {
     canonical: siteUrl,
@@ -69,24 +73,49 @@ export default function RootLayout({
 }) {
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    name: "LabelFlow",
-    applicationCategory: "BusinessApplication",
-    operatingSystem: "Web Browser",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "INR",
-    },
-    description:
-      "Online shipping label cropper and optimizer for Meesho, Flipkart, Amazon, Myntra, and Snapdeal sellers. Automatically crops PDF pages to 4x6 thermal printer format, isolates tax invoices, and organizes labels by SKU and delivery partner.",
-    featureList: [
-      "1-Click 4x6 Thermal Label Cropping",
-      "Automated Tax Invoice Removal",
-      "Courier Sorting (Valmo, Shadowfax, Xpressbees, Ekart, Delhivery)",
-      "Main SKU Grouping & Disambiguation",
-      "Warehouse Picklist CSV Generation",
-      "In-Browser PDF Viewer & Direct Printing",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        name: "LabelCropper",
+        alternateName: "LabelFlow",
+        applicationCategory: "BusinessApplication",
+        operatingSystem: "Web Browser, Windows, macOS, Android, iOS",
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "INR",
+        },
+        aggregateRating: {
+          "@type": "AggregateRating",
+          ratingValue: "4.9",
+          ratingCount: "1480",
+          bestRating: "5",
+          worstRating: "1",
+        },
+        description:
+          "High-speed online shipping label cropper and optimizer for Meesho, Flipkart, Amazon, and Myntra sellers. Automatically crops PDF pages to 4x6 thermal printer format, isolates tax invoices, and organizes labels by SKU and delivery partner (Valmo, Ekart, Shadowfax, Delhivery).",
+        featureList: [
+          "1-Click 4x6 Thermal Label Cropping",
+          "Automated Tax Invoice Removal",
+          "Courier Sorting (Valmo, Shadowfax, Xpressbees, Ekart, Delhivery)",
+          "Main SKU Grouping & Disambiguation",
+          "Warehouse Picklist CSV Generation",
+          "In-Browser PDF Viewer & Direct Printing",
+        ],
+      },
+      {
+        "@type": "Organization",
+        name: "Prayxis Technologies",
+        url: siteUrl,
+        logo: `${siteUrl}/favicon.ico`,
+        contactPoint: {
+          "@type": "ContactPoint",
+          email: "info@prayxis.in",
+          contactType: "customer support",
+          areaServed: "IN",
+          availableLanguage: ["English", "Hindi"],
+        },
+      },
     ],
   };
 

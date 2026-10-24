@@ -36,18 +36,20 @@ RE_INVOICE_TABLE_START = re.compile(
 )
 
 # ==============================================================================
-# ✂️ MEESHO A4 LABEL CROP BOUNDS (MANUAL CONTROLS)
+# ✂️ MEESHO A4 LABEL CROP BOUNDS (DYNAMIC TAX INVOICE POSITIONING)
 # ==============================================================================
-# Standard Meesho A4 page (595.3 x 841.9 pt) me se label ka exact crop area:
+# Standard Meesho A4 page (595.3 x 841.9 pt) margin bounds:
 # X0 = Left margin (8.0 pt - label ke outer black border se 2 pt pehle)
 # Y0 = Top margin (16.0 pt - "Customer Address" ke outer black border se 2 pt upar)
 # X1 = Right margin (586.0 pt - right outer black border ke 2 pt baad)
-# Y1 = Bottom cutoff (353.5 pt - "TAX INVOICE" ke just niche, "BILL TO" table se upar)
-# Agar aapko crop boundary kam/jyada karni ho, toh in values ko change kar sakte hain:
+# Y1 = Dynamic bottom cutoff! Ab hardcoded 353.5 nahi hai - har page par 'TAX INVOICE'
+#      search karke dynamic cutoff lagaya jata hai taaki long address (5-7 lines)
+#      ya multiple products par Product Details table kabhi bhi cut na ho!
 MEESHO_CROP_X0 = 8.0
 MEESHO_CROP_Y0 = 16.0
 MEESHO_CROP_X1 = 586.0
-MEESHO_CROP_Y1 = 353.5
+MEESHO_DEFAULT_CROP_Y1 = 353.5
+MEESHO_CROP_Y1 = MEESHO_DEFAULT_CROP_Y1  # Backward compatibility
 # ==============================================================================
 
 
@@ -107,6 +109,99 @@ class PageInspectionResult:
 class PDFPageInspector:
     """High-speed inspector analyzing PDF pages for shipping label and invoice boundaries."""
 
+    def detect_tax_invoice_separator(self, page: fitz.Page, width: float, height: float) -> float:
+        """Dynamically locate the boundary between shipping label and GST Tax Invoice.
+
+        Searches for 'TAX INVOICE' / 'Original For Recipient' on this specific page
+        in the separator zone (Y: 200 pt to 550 pt). Ensures labels with long addresses
+        (5-7 lines) or multiple items never have their Product Details table truncated.
+
+        Returns the exact Y coordinate (pt) where the shipping label crop should end,
+        including the Product Details table, its bottom border line, and the TAX INVOICE header.
+        """
+        min_search_y = max(180.0, height * 0.22)
+        max_search_y = min(560.0, height * 0.65)
+
+        # 1. Exact text search for TAX INVOICE / Original For Recipient phrases
+        target_phrases = [
+            "TAX INVOICE",
+            "Tax Invoice",
+            "tax invoice",
+            "Original For Recipient",
+            "ORIGINAL FOR RECIPIENT",
+            "Original for Recipient",
+            "TAX INVOICE / BILL OF SUPPLY",
+            "Bill of Supply",
+        ]
+
+        matched_rects: List[fitz.Rect] = []
+        for phrase in target_phrases:
+            try:
+                hits = page.search_for(phrase)
+                for r in hits:
+                    if min_search_y <= r.y0 <= max_search_y:
+                        matched_rects.append(r)
+            except Exception:
+                continue
+
+        if matched_rects:
+            # Find uppermost occurrence in separator zone (header line right below shipping label)
+            first_y0 = min(r.y0 for r in matched_rects)
+            # Group all text rects on this exact same horizontal header line (within 14 pt tolerance)
+            same_line_rects = [r for r in matched_rects if abs(r.y0 - first_y0) <= 14.0]
+            line_bottom_y = max(r.y1 for r in same_line_rects)
+            # Safe 4.0 pt margin below TAX INVOICE header, cleanly above 'Sold By' / 'Bill To' table
+            return round(min(height * 0.65, line_bottom_y + 4.0), 2)
+
+        # 2. Block-level regex search across text blocks
+        try:
+            blocks = page.get_text("blocks")
+            candidate_blocks = [
+                b for b in blocks
+                if min_search_y <= b[1] <= max_search_y and b[4] and b[4].strip()
+            ]
+            for b in candidate_blocks:
+                if RE_TAX_INVOICE_HEADER.search(b[4]):
+                    block_h = b[3] - b[1]
+                    if block_h <= 30.0:
+                        return round(min(height * 0.65, b[3] + 4.0), 2)
+                    return round(min(height * 0.65, b[1] + 18.0), 2)
+        except Exception:
+            pass
+
+        # 3. Fallback: Search for 'Product Details' / 'Order No' table headers
+        try:
+            product_hits = (
+                page.search_for("Product Details")
+                or page.search_for("Product Name")
+                or page.search_for("Order No")
+                or page.search_for("Sub Order No")
+            )
+            valid_p_hits = [r for r in product_hits if min_search_y <= r.y0 <= max_search_y]
+            if valid_p_hits:
+                last_p_y = max(r.y1 for r in valid_p_hits)
+                # Add 52 pt to cover the table row (SKU name, Size, Qty, Color, Order ID) + bottom border
+                return round(min(height * 0.65, last_p_y + 52.0), 2)
+        except Exception:
+            pass
+
+        # 4. Fallback: Search for horizontal vector divider line drawings
+        try:
+            drawings = page.get_drawings()
+            horiz_lines = []
+            for d in drawings:
+                dr = d.get("rect")
+                if dr and dr.width >= 300.0 and dr.height <= 3.0:
+                    if min_search_y <= dr.y0 <= max_search_y:
+                        horiz_lines.append(dr.y1)
+            if horiz_lines:
+                return round(min(height * 0.65, max(horiz_lines) + 4.0), 2)
+        except Exception:
+            pass
+
+        # 5. Default safe cutoff
+        return MEESHO_DEFAULT_CROP_Y1
+
     def inspect_page(self, page: fitz.Page, page_index: int) -> PageInspectionResult:
         """Inspect geometry and text distribution on a PDF page in sub-millisecond time."""
         rect = page.rect
@@ -128,23 +223,28 @@ class PDFPageInspector:
         # ULTRA-FAST PATH 1: Standard Meesho A4 (99% of e-commerce seller batches)
         # -------------------------------------------------------------------------
         if is_meesho_a4:
-            # Clip text extraction strictly to shipping label region (y: 0 to 360 pt).
-            # This completely bypasses parsing the dense 480pt lower GST tax table,
-            # speeding up execution by 40x and saving megabytes of RAM.
-            top_clip = fitz.Rect(0, 0, width, 360.0)
+            # 1. Dynamically detect the exact boundary of the shipping label and TAX INVOICE.
+            # This searches for 'TAX INVOICE' / 'Original For Recipient' on this specific page,
+            # ensuring long addresses (5-7 lines) or multiple items are NEVER cut off!
+            crop_y1 = self.detect_tax_invoice_separator(page, width, height)
+
+            # 2. Extract text up to crop_y1 + 10.0 pt (shipping label area).
+            # This completely captures the full address, barcodes, and complete SKU/Order table,
+            # while skipping the dense lower GST tax table to maintain 40x scan speed.
+            top_clip = fitz.Rect(0, 0, width, crop_y1 + 10.0)
             top_text = page.get_text("text", clip=top_clip).strip()
 
             has_shipping = bool(RE_SHIPPING_INDICATORS.search(top_text))
 
             if has_shipping:
                 # Shipping label is on top, GST Tax invoice is on bottom.
-                # Standard Meesho crop bounds with safe border margins:
+                # Dynamic Meesho crop bounds with safe border margins:
                 # Includes TAX INVOICE header, excludes BILL TO / SHIP TO & Sold By table.
                 crop_box = fitz.Rect(
                     MEESHO_CROP_X0,
                     MEESHO_CROP_Y0,
                     MEESHO_CROP_X1,
-                    MEESHO_CROP_Y1,
+                    crop_y1,
                 )
                 return PageInspectionResult(
                     page_number=page_index + 1,
@@ -153,7 +253,7 @@ class PDFPageInspector:
                     rotation=rotation,
                     layout_type="split_label_invoice",
                     label_rect=crop_box,
-                    invoice_rect=fitz.Rect(0, MEESHO_CROP_Y1, width, height),
+                    invoice_rect=fitz.Rect(0, crop_y1, width, height),
                     is_safe_to_crop=True,
                     is_flagged_for_review=False,
                     full_text=top_text,
@@ -284,11 +384,16 @@ class PDFPageInspector:
         crop_y0 = max(0.0, t_y0 - 4.0)
 
         if has_invoice_table:
-            inv_y0 = min(
-                (b[1] for b in lower_blocks if RE_INVOICE_TABLE_START.search(b[4]) or RE_TAX_INVOICE_HEADER.search(b[4])),
-                default=height * 0.55,
-            )
-            crop_y1 = min(height, inv_y0 - 2.0)
+            # Dynamically detect TAX INVOICE separator if available
+            dyn_y = self.detect_tax_invoice_separator(page, width, height)
+            if dyn_y and dyn_y > crop_y0 + 50.0:
+                crop_y1 = dyn_y
+            else:
+                inv_y0 = min(
+                    (b[1] for b in lower_blocks if RE_INVOICE_TABLE_START.search(b[4]) or RE_TAX_INVOICE_HEADER.search(b[4])),
+                    default=height * 0.55,
+                )
+                crop_y1 = min(height, inv_y0 - 2.0)
         else:
             crop_y1 = min(height, max(b[3] for b in t_blocks) + 16.0)
 

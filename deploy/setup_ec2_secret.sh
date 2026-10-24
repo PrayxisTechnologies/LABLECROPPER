@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # Stealth Setup & Deployment Script for AWS EC2 (Ubuntu 22.04 / 24.04 LTS)
-# Domain: labalecropper.prayxis.in & labelcropper.prayxis.in
+# Domain: labelcropper.prayxis.in (with optional labalecropper.prayxis.in alias)
 # Target Directory: /opt/.sys-daemon (Hidden system-level directory)
 # ==============================================================================
 
@@ -14,7 +14,18 @@ echo "=========================================================="
 # 1. Update system packages
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y curl wget git nginx certbot python3-certbot-nginx \
-    python3 python3-pip python3-venv build-essential
+    python3 python3-pip python3-venv build-essential iptables-persistent netfilter-persistent
+
+# Open Firewall Ports 80 (HTTP) & 443 (HTTPS) - Essential for Oracle Cloud & Ubuntu
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+if command -v ufw &> /dev/null; then
+    sudo ufw allow 80/tcp 2>/dev/null || true
+    sudo ufw allow 443/tcp 2>/dev/null || true
+fi
+if command -v netfilter-persistent &> /dev/null; then
+    sudo netfilter-persistent save 2>/dev/null || true
+fi
 
 # 2. Install Node.js 20 LTS (if not installed)
 if ! command -v node &> /dev/null; then
@@ -93,7 +104,7 @@ EMAIL_FROM="LabelFlow <info@prayxis.in>"
 # Google OAuth2 & Google Drive Configuration
 GOOGLE_CLIENT_ID="731856438069-7qij5j2sm71ba19c181qk0evbgabqo80.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET="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"
-GOOGLE_REDIRECT_URI="https://labalecropper.prayxis.in/auth/google/callback"
+GOOGLE_REDIRECT_URI="https://labelcropper.prayxis.in/auth/google/callback"
 GOOGLE_DRIVE_FOLDER_NAME="LabelFlow - Meesho Labels"
 EOF
 
@@ -176,9 +187,9 @@ sudo systemctl restart sys-web.service
 
 # 8. Configure Nginx Reverse Proxy
 echo "Configuring Nginx..."
-sudo cp "$STEALTH_DIR/core/deploy/nginx.conf" /etc/nginx/sites-available/labalecropper
+sudo cp "$STEALTH_DIR/core/deploy/nginx.conf" /etc/nginx/sites-available/labelcropper
 sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/labalecropper /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/labelcropper /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 
@@ -190,5 +201,5 @@ echo " Nginx: Reverse proxy active on Port 80"
 echo "=========================================================="
 echo " NEXT STEP (After GoDaddy DNS A record points to this IP):"
 echo " Run Certbot SSL command:"
-echo " sudo certbot --nginx -d labalecropper.prayxis.in -d labelcropper.prayxis.in --agree-tos -m prayxistechnologies@gmail.com --redirect --non-interactive"
+echo " sudo certbot --nginx -d labelcropper.prayxis.in --agree-tos -m prayxistechnologies@gmail.com --redirect --non-interactive"
 echo "=========================================================="

@@ -2,6 +2,9 @@
 
 import React, { useEffect, useState } from "react";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
+import { MeeshoSeoContent } from "@/components/MeeshoSeoContent";
+import { FlipkartSeoContent } from "@/components/FlipkartSeoContent";
 import { DropZone } from "@/components/DropZone";
 import { FileList } from "@/components/FileList";
 import { AdvancedOptions } from "@/components/AdvancedOptions";
@@ -368,19 +371,14 @@ export default function CropLabelsPage({
               </div>
             )}
           </div>
+
+          {/* Platform Specific SEO Content */}
+          {platformName?.toLowerCase().includes("meesho") && <MeeshoSeoContent />}
+          {platformName?.toLowerCase().includes("flipkart") && <FlipkartSeoContent />}
         </main>
       )}
 
-      <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-5 mt-12 text-xs text-slate-500 dark:text-slate-400 transition-colors">
-        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>LabelFlow • 4×6 Thermal Shipping Label Generator by Prayxis</span>
-          <div className="flex items-center space-x-4">
-            <a href="/features" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Features</a>
-            <a href="/blogs" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-medium">Blogs</a>
-            <a href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</a>
-          </div>
-        </div>
-      </footer>
+      <Footer />
 
       {/* Ambiguity Confirmation Modal */}
       {showAmbiguityModal && processingResult && processingResult.ambiguous_labels && (

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
 
 export const metadata: Metadata = {
   title: "Terms of Service — LabelFlow",
@@ -57,12 +58,7 @@ export default function TermsOfServicePage() {
         </div>
       </main>
 
-      <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-5 transition-colors">
-        <div className="max-w-4xl mx-auto flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-          <span>&copy; {new Date().getFullYear()} LabelFlow by Prayxis. All rights reserved.</span>
-          <Link href="/" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors">Home</Link>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

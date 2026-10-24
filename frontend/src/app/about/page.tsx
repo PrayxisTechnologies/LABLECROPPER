@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
 
 export const metadata: Metadata = {
   title: "About Us — LabelFlow",
@@ -66,15 +67,7 @@ export default function AboutPage() {
         </div>
       </main>
 
-      <footer className="border-t border-navy-700/60 bg-navy-950/80 px-4 sm:px-8 py-5">
-        <div className="max-w-4xl mx-auto flex items-center justify-between text-xs text-slate-400">
-          <span>&copy; {new Date().getFullYear()} LabelFlow. All rights reserved.</span>
-          <div className="flex items-center space-x-4">
-            <Link href="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
-            <Link href="/contact" className="hover:text-white transition-colors">Contact</Link>
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

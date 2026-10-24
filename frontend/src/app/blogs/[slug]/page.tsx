@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Header } from "@/components/Header";
+import { Footer } from "@/components/Footer";
 import { BLOG_POSTS } from "@/lib/blogs";
 
 interface Props {
@@ -160,17 +161,7 @@ export default function BlogPostPage({ params }: Props) {
         </div>
       </main>
 
-      <footer className="border-t border-slate-200 dark:border-navy-700/60 bg-white/80 dark:bg-navy-950/80 px-4 sm:px-8 py-5 transition-colors">
-        <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
-          <div>
-            <Link href="/blogs" className="hover:text-cyan-600 dark:hover:text-cyan-neon transition-colors font-semibold">← Back to All Guides</Link>
-          </div>
-          <div className="flex items-center space-x-4">
-            <Link href="/privacy-policy" className="hover:text-slate-900 dark:hover:text-white transition-colors">Privacy Policy</Link>
-            <Link href="/terms-of-service" className="hover:text-slate-900 dark:hover:text-white transition-colors">Terms of Service</Link>
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }
