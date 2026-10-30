@@ -50,6 +50,10 @@ def create_application() -> FastAPI:
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://labelcropper.prayxis.in",
+        "http://labelcropper.prayxis.in",
+        "https://labelflow.prayxis.in",
+        "http://labelflow.prayxis.in",
         "https://lablecropper.in",
         "https://www.lablecropper.in",
         "https://lablecropper.prayxis.in",

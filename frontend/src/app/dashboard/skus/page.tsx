@@ -29,6 +29,8 @@ export default function SkusPage() {
   const [skuCode, setSkuCode] = useState<string>("");
   const [keywords, setKeywords] = useState<string[]>([]);
   const [currentKeywordInput, setCurrentKeywordInput] = useState<string>("");
+  const [keywordWarning, setKeywordWarning] = useState<string | null>(null);
+  const keywordInputRef = useRef<HTMLInputElement>(null);
   const [showBulkInput, setShowBulkInput] = useState<boolean>(false);
   const [bulkInputText, setBulkInputText] = useState<string>("");
   const [isActive, setIsActive] = useState<boolean>(true);
@@ -89,6 +91,7 @@ export default function SkusPage() {
     setSkuCode("");
     setKeywords([]);
     setCurrentKeywordInput("");
+    setKeywordWarning(null);
     setShowBulkInput(false);
     setBulkInputText("");
     setIsActive(true);
@@ -106,6 +109,7 @@ export default function SkusPage() {
         : [sku.sku_code];
     setKeywords(initialKeywords);
     setCurrentKeywordInput("");
+    setKeywordWarning(null);
     setShowBulkInput(false);
     setBulkInputText("");
     setIsActive(sku.is_active);
@@ -114,31 +118,58 @@ export default function SkusPage() {
   };
 
   // Add keyword from current input field
-  const handleAddCurrentKeyword = () => {
-    const raw = currentKeywordInput.trim();
+  const handleAddCurrentKeyword = (explicitVal?: string) => {
+    const raw = (explicitVal !== undefined ? explicitVal : currentKeywordInput).trim();
     if (!raw) return;
     const newValues = raw
       .split(/[,;\n\r]+/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
+    let addedCount = 0;
+    let dupVal: string | null = null;
+
     setKeywords((prev) => {
       const combined = [...prev];
       for (const val of newValues) {
         if (!combined.some((k) => k.toLowerCase() === val.toLowerCase())) {
           combined.push(val);
+          addedCount++;
+        } else {
+          dupVal = val;
         }
       }
       return combined;
     });
+
+    if (dupVal && addedCount === 0) {
+      setKeywordWarning(`"${dupVal}" is already in the list.`);
+      setTimeout(() => setKeywordWarning(null), 3000);
+    } else {
+      setKeywordWarning(null);
+    }
+
     setCurrentKeywordInput("");
+    setTimeout(() => {
+      keywordInputRef.current?.focus();
+    }, 50);
   };
 
   // Handle enter or comma in keyword input
   const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" || e.key === ",") {
+    if (
+      e.key === "Enter" ||
+      e.code === "Enter" ||
+      e.code === "NumpadEnter" ||
+      e.keyCode === 13 ||
+      e.key === ","
+    ) {
       e.preventDefault();
-      handleAddCurrentKeyword();
+      e.stopPropagation();
+      const val = (e.currentTarget.value || currentKeywordInput).trim();
+      if (val) {
+        handleAddCurrentKeyword(val);
+      }
     }
   };
 
@@ -682,6 +713,12 @@ export default function SkusPage() {
                   required
                   value={skuCode}
                   onChange={(e) => setSkuCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.code === "Enter" || e.keyCode === 13) {
+                      e.preventDefault();
+                      keywordInputRef.current?.focus();
+                    }
+                  }}
                   placeholder="e.g. GREEN, ROSPACK_80ML, BROWN_BOX"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-navy-950 border border-navy-700 text-white font-mono text-sm placeholder-slate-500 focus:outline-none focus:border-cyan-neon transition-colors"
                 />
@@ -767,19 +804,31 @@ export default function SkusPage() {
                     </div>
                   )}
 
+                  {/* Duplicate or Info warning */}
+                  {keywordWarning && (
+                    <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] flex items-center space-x-1.5 animate-fade-in">
+                      <span>⚠️</span>
+                      <span>{keywordWarning}</span>
+                    </div>
+                  )}
+
                   {/* Input field to add individual or comma-separated values */}
                   <div className="flex items-center space-x-2 pt-1 border-t border-navy-800">
                     <input
+                      ref={keywordInputRef}
                       type="text"
                       value={currentKeywordInput}
-                      onChange={(e) => setCurrentKeywordInput(e.target.value)}
+                      onChange={(e) => {
+                        setCurrentKeywordInput(e.target.value);
+                        if (keywordWarning) setKeywordWarning(null);
+                      }}
                       onKeyDown={handleKeywordKeyDown}
                       placeholder="Type a value & press Enter (or separate by commas)..."
                       className="flex-1 px-3 py-2 rounded-lg bg-navy-900 border border-navy-700 text-white font-mono text-xs placeholder-slate-500 focus:outline-none focus:border-cyan-neon"
                     />
                     <button
                       type="button"
-                      onClick={handleAddCurrentKeyword}
+                      onClick={() => handleAddCurrentKeyword()}
                       disabled={!currentKeywordInput.trim()}
                       className="px-3 py-2 rounded-lg bg-navy-800 hover:bg-navy-700 text-cyan-neon font-bold text-xs border border-cyan-neon/30 disabled:opacity-40 transition-colors cursor-pointer"
                     >
