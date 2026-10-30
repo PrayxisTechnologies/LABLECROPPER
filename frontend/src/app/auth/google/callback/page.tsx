@@ -28,6 +28,8 @@ function GoogleCallbackContent() {
       return;
     }
 
+    const authCode = code;
+
     async function handleAuth() {
       const redirectUri = `${window.location.origin}/auth/google/callback`;
 
@@ -37,7 +39,7 @@ function GoogleCallbackContent() {
         // If user is already logged in, this is a "Link Google Drive" action
         if (user) {
           setStatusText("Linking Google Drive storage to your account...");
-          await apiLinkGoogleDrive(code, redirectUri);
+          await apiLinkGoogleDrive(authCode, redirectUri);
           await refreshUser();
           router.replace("/dashboard/history?drive=connected");
           return;
@@ -46,7 +48,7 @@ function GoogleCallbackContent() {
         // If user is not logged in, this is a Google Sign In / Sign Up
         setStatusText("Signing in & linking your Google Drive...");
         await loginWithGoogle({
-          code,
+          code: authCode,
           redirect_uri: redirectUri,
           link_drive: true,
         });
