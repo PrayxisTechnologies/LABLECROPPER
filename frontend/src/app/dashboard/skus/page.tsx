@@ -126,27 +126,25 @@ export default function SkusPage() {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
+    const updated = [...keywords];
     let addedCount = 0;
     let dupVal: string | null = null;
 
-    setKeywords((prev) => {
-      const combined = [...prev];
-      for (const val of newValues) {
-        if (!combined.some((k) => k.toLowerCase() === val.toLowerCase())) {
-          combined.push(val);
-          addedCount++;
-        } else {
-          dupVal = val;
-        }
+    for (const val of newValues) {
+      if (!updated.some((k) => k.toLowerCase() === val.toLowerCase())) {
+        updated.push(val);
+        addedCount++;
+      } else {
+        dupVal = val;
       }
-      return combined;
-    });
+    }
 
-    if (dupVal && addedCount === 0) {
-      setKeywordWarning(`"${dupVal}" is already in the list.`);
-      setTimeout(() => setKeywordWarning(null), 3000);
-    } else {
+    if (addedCount > 0) {
+      setKeywords(updated);
       setKeywordWarning(null);
+    } else if (dupVal) {
+      setKeywordWarning(`"${dupVal}" is already added in the list below.`);
+      setTimeout(() => setKeywordWarning(null), 4000);
     }
 
     setCurrentKeywordInput("");
@@ -169,6 +167,9 @@ export default function SkusPage() {
       const val = (e.currentTarget.value || currentKeywordInput).trim();
       if (val) {
         handleAddCurrentKeyword(val);
+      } else {
+        // If input is empty and Enter is pressed, submit/save the whole SKU
+        handleSaveSku();
       }
     }
   };
@@ -186,22 +187,20 @@ export default function SkusPage() {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
-    setKeywords((prev) => {
-      const combined = [...prev];
-      for (const val of parsed) {
-        if (!combined.some((k) => k.toLowerCase() === val.toLowerCase())) {
-          combined.push(val);
-        }
+    const updated = [...keywords];
+    for (const val of parsed) {
+      if (!updated.some((k) => k.toLowerCase() === val.toLowerCase())) {
+        updated.push(val);
       }
-      return combined;
-    });
+    }
+    setKeywords(updated);
     setBulkInputText("");
     setShowBulkInput(false);
   };
 
   // Save SKU (Create or Update)
-  const handleSaveSku = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveSku = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setModalError(null);
 
     const cleanSku = skuCode.trim();
@@ -242,9 +241,12 @@ export default function SkusPage() {
 
       if (editingSku) {
         await apiUpdateSku(editingSku.id, payload);
+        setSyncSuccessMessage(`✓ SKU '${cleanSku}' updated successfully!`);
       } else {
         await apiCreateSku(payload);
+        setSyncSuccessMessage(`✓ SKU '${cleanSku}' created successfully!`);
       }
+      setTimeout(() => setSyncSuccessMessage(null), 4000);
       setModalOpen(false);
       loadSkus();
     } catch (err: unknown) {
