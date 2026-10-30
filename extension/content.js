@@ -5,10 +5,10 @@
 
 const TARGET_ORIGIN = window.location.origin;
 
-// 0. Extract current authentication state from LabelFlow website localStorage
+// 0. Extract current authentication state from LabelFlow website localStorage or cookies
 function getLocalAuthStatus() {
   try {
-    const token = localStorage.getItem("labelflow_jwt_token");
+    let token = localStorage.getItem("labelflow_jwt_token");
     const userRaw = localStorage.getItem("labelflow_user_profile");
     let user = null;
     if (userRaw) {
@@ -16,10 +16,19 @@ function getLocalAuthStatus() {
         user = JSON.parse(userRaw);
       } catch {}
     }
+
+    // Also check document.cookie fallback
+    if (!token && typeof document !== "undefined" && document.cookie) {
+      const match = document.cookie.match(/labelflow_token=([^;]+)/);
+      if (match && match[1]) {
+        token = match[1];
+      }
+    }
+
     const isLoggedIn = Boolean(token && typeof token === "string" && token.trim().length > 10);
     return {
       isLoggedIn,
-      user: isLoggedIn ? user : null,
+      user: isLoggedIn ? (user || { name: "Seller Account" }) : null,
       token: isLoggedIn ? token : null,
       origin: window.location.origin,
       updatedAt: Date.now(),

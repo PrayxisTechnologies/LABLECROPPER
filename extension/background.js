@@ -31,6 +31,23 @@ function isLabelFlowUrl(urlStr) {
 // Retrieve cached auth status or query active tabs
 async function getCachedAuthStatus() {
   try {
+    // 1. Direct Chrome Cookie Check (ALWAYS WORKS across all tabs & sessions)
+    try {
+      const allCookies = await chrome.cookies.getAll({ name: "labelflow_token" });
+      if (allCookies && allCookies.length > 0 && allCookies[0].value) {
+        const authData = {
+          isLoggedIn: true,
+          user: { name: "Seller Account", email: "Active Seller" },
+          token: allCookies[0].value,
+          updatedAt: Date.now(),
+        };
+        await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: authData });
+        return authData;
+      }
+    } catch (cookieErr) {
+      console.debug("Cookie check failed:", cookieErr);
+    }
+
     const stored = await chrome.storage.local.get(AUTH_STORAGE_KEY);
     const auth = stored[AUTH_STORAGE_KEY];
     if (auth && auth.isLoggedIn) {

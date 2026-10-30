@@ -112,36 +112,55 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let currentAuthState = { isLoggedIn: false, user: null };
 
+  const updateAuthUI = (auth) => {
+    if (auth && auth.isLoggedIn) {
+      currentAuthState = auth;
+      if (authBar) authBar.className = "auth-bar logged-in";
+      if (authIcon) authIcon.textContent = "✓";
+      const uName = auth.user?.name || auth.user?.email || "Seller Account";
+      if (authText) authText.textContent = `Connected: ${uName}`;
+      if (authActionBtn) {
+        authActionBtn.textContent = "Dashboard";
+        authActionBtn.onclick = () => {
+          chrome.tabs.create({ url: "https://labelcropper.prayxis.in/dashboard" });
+        };
+      }
+    } else {
+      currentAuthState = { isLoggedIn: false, user: null };
+      if (authBar) authBar.className = "auth-bar logged-out";
+      if (authIcon) authIcon.textContent = "🔒";
+      if (authText) authText.textContent = "Login Required to Upload (Free)";
+      if (authActionBtn) {
+        authActionBtn.textContent = "Log In (Free)";
+        authActionBtn.onclick = () => {
+          chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
+        };
+      }
+    }
+  };
+
   const checkAuthStatus = async () => {
     try {
+      // 1. Direct Chrome Cookie Check (ALWAYS WORKS!)
+      try {
+        const cookies = await chrome.cookies.getAll({ name: "labelflow_token" });
+        if (cookies && cookies.length > 0 && cookies[0].value) {
+          updateAuthUI({
+            isLoggedIn: true,
+            user: { name: "Seller Account", email: "Active Seller" },
+            token: cookies[0].value,
+          });
+          return;
+        }
+      } catch (cErr) {
+        console.debug("Popup cookie query error:", cErr);
+      }
+
       chrome.runtime.sendMessage({ action: "CHECK_AUTH_STATUS" }, (res) => {
         if (res && res.auth && res.auth.isLoggedIn) {
-          currentAuthState = res.auth;
-          if (authBar) {
-            authBar.className = "auth-bar logged-in";
-          }
-          if (authIcon) authIcon.textContent = "✓";
-          const uName = res.auth.user?.name || res.auth.user?.email || "Seller Account";
-          if (authText) authText.textContent = `Connected: ${uName}`;
-          if (authActionBtn) {
-            authActionBtn.textContent = "Dashboard";
-            authActionBtn.onclick = () => {
-              chrome.tabs.create({ url: "https://labelcropper.prayxis.in/dashboard" });
-            };
-          }
+          updateAuthUI(res.auth);
         } else {
-          currentAuthState = { isLoggedIn: false, user: null };
-          if (authBar) {
-            authBar.className = "auth-bar logged-out";
-          }
-          if (authIcon) authIcon.textContent = "🔒";
-          if (authText) authText.textContent = "Login Required to Upload (Free)";
-          if (authActionBtn) {
-            authActionBtn.textContent = "Log In (Free)";
-            authActionBtn.onclick = () => {
-              chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
-            };
-          }
+          updateAuthUI({ isLoggedIn: false, user: null });
         }
       });
     } catch (e) {
@@ -967,8 +986,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Main CTA: Print / Crop Selected with Login Rule Enforcement
   if (cropSelectedBtn) {
-    cropSelectedBtn.addEventListener("click", () => {
-      // 1. Strict Gatekeeper: Must be logged in
+    cropSelectedBtn.addEventListener("click", async () => {
+      // 0. Double-check live cookies so logged-in users NEVER get redirected to /login
+      if (!currentAuthState || !currentAuthState.isLoggedIn) {
+        try {
+          const cookies = await chrome.cookies.getAll({ name: "labelflow_token" });
+          if (cookies && cookies.length > 0 && cookies[0].value) {
+            currentAuthState = { isLoggedIn: true, token: cookies[0].value };
+            updateAuthUI(currentAuthState);
+          }
+        } catch {}
+      }
+
+      // 1. Strict Gatekeeper: Only redirect if genuinely not logged in
       if (!currentAuthState || !currentAuthState.isLoggedIn) {
         showBanner("🔒 Login Required: PDF upload & auto-crop use karne ke liye pehle login karein (Free Account).", "error");
         chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
