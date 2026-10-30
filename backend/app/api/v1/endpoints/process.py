@@ -564,9 +564,12 @@ async def download_extension_zip():
     import zipfile
 
     candidates = [
+        Path(__file__).resolve().parents[5] / "extension",
+        Path.cwd().parent / "extension",
         Path.cwd() / "extension",
-        Path(__file__).resolve().parent.parent.parent.parent.parent / "extension",
-        Path(settings.BASE_DIR) / "extension" if hasattr(settings, "BASE_DIR") else Path.cwd() / "extension",
+        Path("/home/ubuntu/labelflow/extension"),
+        Path.cwd().resolve().parent / "extension",
+        Path(__file__).resolve().parents[4] / "extension",
     ]
     ext_dir = None
     for c in candidates:
@@ -575,6 +578,7 @@ async def download_extension_zip():
             break
 
     if not ext_dir:
+        logger.error("Extension directory not found! Checked: %s", [str(c) for c in candidates])
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="LabelFlow Extension package directory was not found on server.",

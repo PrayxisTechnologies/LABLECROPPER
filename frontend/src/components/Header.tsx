@@ -84,34 +84,23 @@ export const Header: React.FC<HeaderProps> = () => {
           </div>
         </Link>
 
-        {/* Center: Clean Navigation Links with vertical dot dividers ⋮ */}
-        <nav className="hidden lg:flex items-center space-x-2 sm:space-x-2.5 py-1">
-          {navLinks.map((link, idx) => {
+        {/* Center: Clean Modern Navigation Links */}
+        <nav className="hidden lg:flex items-center space-x-1 xl:space-x-1.5 py-1">
+          {navLinks.map((link) => {
             const active = isActive(link.href);
-            const isLast = idx === navLinks.length - 1;
 
             return (
-              <React.Fragment key={link.href}>
-                <Link
-                  href={link.href}
-                  className={`text-sm font-semibold transition-all duration-150 px-2 py-1 rounded-md ${
-                    active
-                      ? "text-cyan-600 dark:text-cyan-neon font-bold drop-shadow-[0_0_8px_rgba(0,209,255,0.35)]"
-                      : "text-slate-600 dark:text-slate-300 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-100/70 dark:hover:bg-navy-800/50"
-                  }`}
-                >
-                  {link.label}
-                </Link>
-
-                {!isLast && (
-                  <span
-                    aria-hidden="true"
-                    className="text-slate-300 dark:text-slate-700 select-none text-xs font-bold px-0.5"
-                  >
-                    ⋮
-                  </span>
-                )}
-              </React.Fragment>
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`text-xs xl:text-[13px] font-semibold transition-all duration-150 px-2.5 xl:px-3 py-1.5 rounded-xl ${
+                  active
+                    ? "bg-cyan-500/15 text-cyan-600 dark:text-cyan-neon font-bold border border-cyan-400/30 shadow-[0_0_10px_rgba(0,209,255,0.15)]"
+                    : "text-slate-600 dark:text-slate-300 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-100/80 dark:hover:bg-navy-800/60"
+                }`}
+              >
+                {link.label}
+              </Link>
             );
           })}
         </nav>
@@ -217,11 +206,11 @@ export const Header: React.FC<HeaderProps> = () => {
           <button
             type="button"
             onClick={() => setExtensionModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all duration-150 bg-gradient-to-r from-cyan-500/10 to-indigo-500/10 border-cyan-400/40 dark:border-cyan-neon/30 text-cyan-600 dark:text-cyan-neon hover:bg-cyan-500/20 active:scale-95 shadow-sm cursor-pointer"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all duration-150 bg-gradient-to-r from-cyan-500 via-indigo-600 to-purple-600 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-md shadow-cyan-500/25 hover:shadow-cyan-500/40 active:scale-95 cursor-pointer"
             title="Download Chrome Extension (100% Free)"
           >
             <span className="text-sm">⚡</span>
-            <span className="hidden sm:inline">Extension</span>
+            <span>Extension</span>
           </button>
 
           {/* Quick Search Button */}

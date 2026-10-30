@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { getExtensionDownloadUrl } from "@/lib/api";
 
 interface ExtensionDownloadModalProps {
@@ -12,6 +12,9 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -30,10 +33,39 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
 
   const downloadUrl = getExtensionDownloadUrl();
 
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const res = await fetch(downloadUrl);
+      if (!res.ok) {
+        throw new Error(`Server returned ${res.status}: ${res.statusText}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "LabelFlow-Chrome-Extension.zip";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: unknown) {
+      console.warn("Direct blob download failed, falling back to window location:", err);
+      // Fallback: direct browser download trigger
+      window.location.href = downloadUrl;
+    } finally {
+      setTimeout(() => setDownloading(false), 1500);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
+    <div
+      className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md p-3 sm:p-6 flex justify-center items-start"
+      onClick={onClose}
+    >
       <div
-        className="relative w-full max-w-xl rounded-2xl border border-cyan-400/40 dark:border-cyan-neon/30 bg-white dark:bg-[#07111F] p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]"
+        className="relative w-full max-w-xl my-4 sm:my-8 rounded-2xl border border-cyan-400/40 dark:border-cyan-neon/30 bg-white dark:bg-[#07111F] p-5 sm:p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
@@ -51,8 +83,8 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
 
         {/* Header with Chrome Icon & Branding */}
         <div className="flex items-start space-x-3.5 pr-8">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-purple-600 p-0.5 shadow-[0_0_15px_rgba(0,209,255,0.4)] shrink-0 flex items-center justify-center text-white">
-            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-purple-600 p-0.5 shadow-[0_0_15px_rgba(0,209,255,0.4)] shrink-0 flex items-center justify-center text-white">
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
               <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
               <line x1="12" y1="22.08" x2="12" y2="12" />
@@ -60,54 +92,74 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">
+              <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight">
                 LabelFlow Chrome Extension
               </h2>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
                 100% Free
               </span>
             </div>
-            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-snug">
-              Meesho, Flipkart, Snapdeal, Amazon &amp; Myntra se label download hote hi automatically detect karein aur 1-click me thermal 4×6 crop karein.
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-snug">
+              Meesho, Flipkart, Snapdeal, Amazon &amp; Myntra label downloads ko detect karke 1-click me thermal 4×6 crop karein.
             </p>
           </div>
         </div>
 
-        {/* Big Action: Download ZIP */}
-        <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-500/10 via-indigo-500/10 to-purple-500/10 border border-cyan-400/40 dark:border-cyan-neon/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-inner">
+        {/* Big Action: Download ZIP Card */}
+        <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-500/15 via-indigo-500/10 to-purple-500/15 border-2 border-cyan-400/50 dark:border-cyan-neon/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-lg">
           <div>
-            <span className="text-xs font-bold text-slate-900 dark:text-white block">
-              Package: LabelFlow-Chrome-Extension.zip
+            <span className="text-xs font-black text-slate-900 dark:text-white flex items-center space-x-1.5">
+              <span>📦</span>
+              <span>LabelFlow-Chrome-Extension.zip</span>
             </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              Version 2.1.0 • Manifest V3 • Zero Setup Fee
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+              Latest Version 2.1.0 • Manifest V3 • 1-Click Install
             </span>
           </div>
 
-          <a
-            href={downloadUrl}
-            download="LabelFlow-Chrome-Extension.zip"
-            className="inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-cyan-500 via-indigo-600 to-cyan-400 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
+            className="inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-cyan-500 via-indigo-600 to-cyan-400 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-lg shadow-cyan-500/30 active:scale-95 transition-all cursor-pointer whitespace-nowrap disabled:opacity-60"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            <span>⬇️ Download Extension (.ZIP)</span>
-          </a>
+            {downloading ? (
+              <>
+                <svg className="w-4 h-4 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                <span>Downloading ZIP...</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span>⬇️ Download Extension (.ZIP)</span>
+              </>
+            )}
+          </button>
         </div>
 
+        {downloadError && (
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
+            {downloadError}
+          </div>
+        )}
+
         {/* 3-Step Simple Install Guide */}
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <span className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-cyan-neon block">
             Install Kaise Karein (Sirf 1 Minute)
           </span>
 
-          <div className="grid grid-cols-1 gap-2.5">
+          <div className="grid grid-cols-1 gap-2">
             {/* Step 1 */}
             <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
-              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+              <span className="w-5 h-5 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0 text-[11px]">
                 1
               </span>
               <div>
@@ -122,7 +174,7 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
 
             {/* Step 2 */}
             <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
-              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+              <span className="w-5 h-5 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0 text-[11px]">
                 2
               </span>
               <div>
@@ -130,14 +182,14 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
                   Chrome me Developer Mode ON karein
                 </span>
                 <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
-                  Google Chrome me new tab kholein, <code className="text-cyan-600 dark:text-cyan-neon font-bold">chrome://extensions</code> par jayein aur top-right me <strong>Developer mode toggle ON</strong> karein.
+                  Google Chrome me naya tab kholein: <code className="text-cyan-600 dark:text-cyan-neon font-bold">chrome://extensions</code> aur top-right me <strong>Developer mode toggle ON</strong> karein.
                 </span>
               </div>
             </div>
 
             {/* Step 3 */}
             <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
-              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+              <span className="w-5 h-5 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0 text-[11px]">
                 3
               </span>
               <div>
@@ -161,7 +213,17 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
         </div>
 
         {/* Footer actions */}
-        <div className="flex items-center justify-end space-x-2.5 pt-2 border-t border-slate-200 dark:border-navy-800">
+        <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-navy-800">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
+            className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-cyan-600 dark:text-cyan-neon bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/30 transition-colors cursor-pointer"
+          >
+            <span>⬇️</span>
+            <span>Download ZIP</span>
+          </button>
+
           <button
             type="button"
             onClick={onClose}
