@@ -22,6 +22,7 @@ class MasterLabelItem(BaseModel):
     user_id: str = Field(..., description="Seller user ID")
     order_id: str = Field(..., description="Unique Order Number / Sub-Order ID")
     sku: str = Field(..., description="Product SKU identifier")
+    matched_sku: Optional[str] = Field(default=None, description="Matched canonical or mapped SKU")
     wbl_id: Optional[str] = Field(default=None, description="Tracking / Waybill ID (AWB)")
     courier_partner: str = Field(default="Unassigned", description="Delivery Logistics Partner")
     marketplace: str = Field(default="Meesho", description="Platform (Meesho, Flipkart, etc.)")

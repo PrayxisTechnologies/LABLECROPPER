@@ -118,13 +118,6 @@ export default function RegisterPage() {
           <div className="mb-5 space-y-3">
             <GoogleSignInButton label="Sign up with Google (Instant)" />
 
-            <div className="flex items-center justify-center space-x-2 px-3 py-2 rounded-xl bg-cyan-neon/10 border border-cyan-neon/20 text-[11px] text-cyan-600 dark:text-cyan-neon font-medium">
-              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
-              </svg>
-              <span>Instant verification & free Google Drive storage link!</span>
-            </div>
-
             <div className="flex items-center my-4">
               <div className="flex-grow border-t border-slate-200 dark:border-navy-800" />
               <span className="px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">

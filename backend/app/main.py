@@ -17,6 +17,15 @@ async def lifespan(app: FastAPI):
     """Application lifespan context manager for startup and shutdown events."""
     logger.info("Starting LabelFlow application...")
     await init_db()
+    # Auto-heal any past missing tracking/waybill numbers & wrong order IDs in the background
+    try:
+        import asyncio
+        from app.services.master_sheet.service import master_sheet_service
+        asyncio.create_task(master_sheet_service.heal_all_missing_waybills())
+        asyncio.create_task(master_sheet_service.heal_all_wrong_order_ids())
+    except Exception as e:
+        logger.warning("Could not schedule background healers: %s", str(e))
+
     yield
     logger.info("Shutting down LabelFlow application...")
     await close_db()

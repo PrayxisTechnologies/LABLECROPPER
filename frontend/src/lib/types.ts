@@ -55,16 +55,26 @@ export type SortOption =
   | "original_order"
   | "sku"
   | "courier_partner"
-  | "sku_courier";
+  | "sku_courier"
+  | "marketplace"
+  | "marketplace_sku_courier"
+  | "marketplace_courier"
+  | "sku_marketplace_courier"
+  | "courier_sku_marketplace"
+  | "courier_marketplace_sku"
+  | "sku_courier_marketplace";
 
 export interface ProcessingConfig {
   output_format: string; // "4x6_thermal" | "a4_grid"
   sort_by: SortOption;
   remove_invoice: boolean;
   enable_sku_picklist: boolean;
+  smart_sku_detection?: boolean;
   excluded_main_skus?: string[];
   excluded_skus?: string[];
   excluded_couriers?: string[];
+  excluded_order_ids?: string[];
+  excluded_marketplaces?: string[];
 }
 
 export interface ExtractedSKU {
@@ -78,6 +88,12 @@ export interface ExtractedSKU {
 
 export interface CourierSummary {
   courier: string;
+  label_count: number;
+  percentage: number;
+}
+
+export interface MarketplaceSummary {
+  marketplace: string;
   label_count: number;
   percentage: number;
 }
@@ -102,6 +118,7 @@ export interface PageProcessingRecord {
   courier_partner: string;
   courier_confidence: number;
   sku_items: ExtractedSKU[];
+  marketplace?: string;
   output_page_index?: number;
   dimensions_pt: number[];
 }
@@ -136,6 +153,7 @@ export interface UploadInspectionResponse {
   total_pages: number;
   total_labels: number;
   courier_breakdown: CourierSummary[];
+  marketplace_breakdown?: MarketplaceSummary[];
   main_skus: MainSkuSummary[];
   all_skus: SubSkuSummary[];
 }
@@ -151,6 +169,18 @@ export interface AmbiguousLabelItem {
   matching_keyword?: string;
 }
 
+export interface DuplicateLabelItem {
+  order_id: string;
+  wbl_id?: string;
+  sku: string;
+  courier: string;
+  input_filename: string;
+  page_number: number;
+  previous_job_id?: string;
+  previous_filename?: string;
+  previous_processed_at?: string;
+}
+
 export interface ProcessingJobResponse {
   job_id: string;
   status: "completed" | "partial" | "failed";
@@ -162,6 +192,7 @@ export interface ProcessingJobResponse {
   total_invoices_removed: number;
   total_pages_flagged: number;
   courier_breakdown: CourierSummary[];
+  marketplace_breakdown?: MarketplaceSummary[];
   main_skus?: MainSkuSummary[];
   all_skus?: SubSkuSummary[];
   picklist_items: PicklistItem[];
@@ -169,6 +200,12 @@ export interface ProcessingJobResponse {
   warnings: string[];
   has_ambiguity?: boolean;
   ambiguous_labels?: AmbiguousLabelItem[];
+  has_duplicates?: boolean;
+  all_labels_duplicate?: boolean;
+  duplicate_labels?: DuplicateLabelItem[];
+  excluded_duplicates_count?: number;
+  formatted_filename?: string;
+  marketplace?: string;
   downloads: DownloadLinks;
 }
 
@@ -267,6 +304,10 @@ export interface JobHistoryItem {
     synced_at?: string;
   };
   has_ambiguity: boolean;
+  formatted_filename?: string;
+  marketplace?: string;
+  is_trashed?: boolean;
+  trashed_at?: string;
 }
 
 export interface JobHistoryResponse {
@@ -274,6 +315,8 @@ export interface JobHistoryResponse {
   total: number;
   page: number;
   size: number;
+  active_count?: number;
+  trash_count?: number;
 }
 
 export interface GoogleDriveStatus {
@@ -306,6 +349,7 @@ export interface MasterLabelItem {
   user_id: string;
   order_id: string;
   sku: string;
+  matched_sku?: string | null;
   wbl_id?: string | null;
   courier_partner: string;
   marketplace: string;

@@ -50,7 +50,10 @@ async def get_optional_current_user(
 
     user_id = payload["sub"]
     try:
-        user = await db.users.find_one({"_id": ObjectId(user_id)})
+        user_query = {"$or": [{"_id": str(user_id)}]}
+        if ObjectId.is_valid(user_id):
+            user_query["$or"].append({"_id": ObjectId(user_id)})
+        user = await db.users.find_one(user_query)
         if not user or not user.get("is_active", True):
             return None
         return user

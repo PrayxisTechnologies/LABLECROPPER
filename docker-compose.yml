@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: labelflow_backend
+    restart: always
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+      - AUTH_COOKIE_SECURE=true
+      - MONGODB_URI=mongodb+srv://prayxistechnologies_db_user:3ELAR327CBt6w8Jy@cluster0.lc8hqsq.mongodb.net/labelflow?retryWrites=true&w=majority
+      - MONGODB_DATABASE=labelflow
+      - AUTH_SECRET_KEY=labelflow-jwt-secret-key-prod-2026-super-secure-token-meesho-cropper
+    volumes:
+      - ./backend/storage:/app/storage
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - labelflow_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: labelflow_frontend
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - labelflow_net
+
+networks:
+  labelflow_net:
+    driver: bridge

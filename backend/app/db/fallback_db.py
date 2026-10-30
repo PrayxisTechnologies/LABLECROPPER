@@ -46,6 +46,21 @@ def matches_query(doc: dict, query: dict) -> bool:
                 return False
             continue
 
+        # Support nested dot-notation like "appearances.job_id"
+        if "." in k:
+            parts = k.split(".", 1)
+            root = doc.get(parts[0])
+            if isinstance(root, list):
+                if not any(isinstance(item, dict) and matches_query(item, {parts[1]: v}) for item in root):
+                    return False
+                continue
+            elif isinstance(root, dict):
+                if not matches_query(root, {parts[1]: v}):
+                    return False
+                continue
+            else:
+                return False
+
         doc_val = doc.get(k)
 
         if isinstance(v, dict):
@@ -67,8 +82,23 @@ def matches_query(doc: dict, query: dict) -> bool:
                 allowed = [str(x) for x in v["$in"]]
                 if str(doc_val) not in allowed:
                     return False
+            elif "$nin" in v:
+                forbidden = [str(x) for x in v["$nin"]]
+                if str(doc_val) in forbidden:
+                    return False
             elif "$ne" in v:
-                if str(doc_val) == str(v["$ne"]):
+                target_ne = v["$ne"]
+                if doc_val == target_ne or (doc_val is not None and str(doc_val).strip().lower() == str(target_ne).strip().lower()):
+                    return False
+            elif "$not" in v:
+                if matches_query({k: doc_val}, {k: v["$not"]}):
+                    return False
+            elif "$exists" in v:
+                exists = k in doc
+                if exists != bool(v["$exists"]):
+                    return False
+            elif "$size" in v:
+                if not isinstance(doc_val, list) or len(doc_val) != v["$size"]:
                     return False
             elif "$gt" in v:
                 if doc_val is None or doc_val <= v["$gt"]:
@@ -86,19 +116,28 @@ def matches_query(doc: dict, query: dict) -> bool:
             # Direct value equality (string-coerced for ObjectIds)
             if doc_val is None and v is None:
                 continue
-            if str(doc_val) != str(v):
+            if k == "email" and isinstance(doc_val, str) and isinstance(v, str):
+                if doc_val.strip().lower() != v.strip().lower():
+                    return False
+            elif str(doc_val) != str(v):
                 return False
 
     return True
 
 
 def apply_update(doc: dict, update: dict) -> bool:
-    """Apply MongoDB-style $set, $inc, $push updates."""
+    """Apply MongoDB-style $set, $inc, $push, $pull updates."""
     modified = False
     if "$set" in update:
         for k, v in update["$set"].items():
             doc[k] = v
             modified = True
+
+    if "$unset" in update:
+        for k in update["$unset"]:
+            if k in doc:
+                del doc[k]
+                modified = True
 
     if "$inc" in update:
         for k, v in update["$inc"].items():
@@ -111,6 +150,23 @@ def apply_update(doc: dict, update: dict) -> bool:
                 doc[k] = []
             doc[k].append(v)
             modified = True
+
+    if "$pull" in update:
+        for k, pull_filter in update["$pull"].items():
+            if k in doc and isinstance(doc[k], list):
+                if isinstance(pull_filter, dict):
+                    orig_len = len(doc[k])
+                    doc[k] = [
+                        item for item in doc[k]
+                        if not (isinstance(item, dict) and matches_query(item, pull_filter))
+                    ]
+                    if len(doc[k]) != orig_len:
+                        modified = True
+                else:
+                    orig_len = len(doc[k])
+                    doc[k] = [item for item in doc[k] if item != pull_filter]
+                    if len(doc[k]) != orig_len:
+                        modified = True
 
     return modified
 
@@ -252,6 +308,44 @@ class InMemoryCollection:
 
         return UpdateResult(matched_count=0, modified_count=0)
 
+    async def update_many(
+        self,
+        filter_query: dict,
+        update: dict,
+        upsert: bool = False,
+    ) -> UpdateResult:
+        matched = 0
+        modified = 0
+        for doc in self._docs:
+            if matches_query(doc, filter_query):
+                matched += 1
+                if apply_update(doc, update):
+                    modified += 1
+        if modified > 0:
+            self.db.schedule_save()
+        return UpdateResult(matched_count=matched, modified_count=modified)
+
+    async def distinct(self, key: str, filter_query: Optional[dict] = None) -> List[Any]:
+        q = filter_query or {}
+        seen = set()
+        result = []
+        for d in self._docs:
+            if matches_query(d, q):
+                val = d.get(key)
+                if val is not None:
+                    if isinstance(val, list):
+                        for item in val:
+                            item_key = str(item)
+                            if item_key not in seen:
+                                seen.add(item_key)
+                                result.append(item)
+                    else:
+                        item_key = str(val)
+                        if item_key not in seen:
+                            seen.add(item_key)
+                            result.append(val)
+        return result
+
     async def delete_one(self, filter_query: dict) -> DeleteResult:
         for idx, doc in enumerate(self._docs):
             if matches_query(doc, filter_query):
@@ -268,6 +362,30 @@ class InMemoryCollection:
             self.db.schedule_save()
         return DeleteResult(deleted_count=deleted)
 
+    async def bulk_write(self, requests: list, ordered: bool = False) -> UpdateResult:
+        """Execute a batch of insert and update operations in memory."""
+        modified_count = 0
+        inserted_count = 0
+        for req in requests:
+            try:
+                # Handle pymongo.InsertOne or dict
+                if hasattr(req, "_doc"):
+                    await self.insert_one(req._doc)
+                    inserted_count += 1
+                elif isinstance(req, dict) and "insert" in req:
+                    await self.insert_one(req["insert"])
+                    inserted_count += 1
+                # Handle pymongo.UpdateOne
+                elif hasattr(req, "_filter") and hasattr(req, "_doc"):
+                    res = await self.update_one(req._filter, req._doc, upsert=getattr(req, "_upsert", False))
+                    modified_count += res.modified_count
+                elif isinstance(req, dict) and "filter" in req and "update" in req:
+                    res = await self.update_one(req["filter"], req["update"], upsert=req.get("upsert", False))
+                    modified_count += res.modified_count
+            except Exception:
+                pass
+        return UpdateResult(matched_count=modified_count, modified_count=modified_count)
+
     async def create_index(self, *args, **kwargs) -> str:
         return "in_memory_index"
 
@@ -276,7 +394,12 @@ class InMemoryDatabase:
     """Full-featured async in-memory database with automatic file persistence."""
 
     def __init__(self, persistence_file: str = "storage/local_fallback_db.json"):
-        self.file_path = Path(persistence_file)
+        p = Path(persistence_file)
+        if not p.exists() and (Path("backend") / persistence_file).exists():
+            p = Path("backend") / persistence_file
+        elif not p.exists() and (Path("..") / persistence_file).exists():
+            p = Path("..") / persistence_file
+        self.file_path = p
         self._collections: Dict[str, InMemoryCollection] = {}
         self._save_timer: Optional[asyncio.Task] = None
         self._load_from_disk()

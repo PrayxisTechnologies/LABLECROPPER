@@ -27,12 +27,13 @@ const CONNECT_TIMEOUT = 4500; // 4.5s max connection wait
 const GREETING_TIMEOUT = 3500; // 3.5s max greeting wait
 const SOCKET_TIMEOUT = 7000; // 7s max socket wait
 
-// Memory cache of fastest working port (Port 587 STARTTLS is generally fastest on Indian ISPs)
-let preferredPort: 587 | 465 = 587;
+// Memory cache of fastest working port: default to Port 465 (Direct SSL) as configured in .env.local
+const initialSmtpPort: 587 | 465 = parseInt(process.env.SMTP_PORT || "465", 10) === 587 ? 587 : 465;
+let preferredPort: 587 | 465 = initialSmtpPort;
 
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST || "smtpout.secureserver.net";
-  const port = parseInt(process.env.SMTP_PORT || "587", 10);
+  const port = initialSmtpPort;
   const user = process.env.SMTP_USER || "info@prayxis.in";
   const pass = (process.env.SMTP_PASS || "Prayxis@1234asdfG").trim();
   const from = process.env.EMAIL_FROM || '"LabelFlow" <info@prayxis.in>';

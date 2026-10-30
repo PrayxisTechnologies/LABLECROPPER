@@ -45,20 +45,26 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password or not plain_password:
         return False
 
-    if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
-        if HAS_BCRYPT and bcrypt is not None:
-            try:
-                pw_bytes = plain_password.encode("utf-8")
-                hash_bytes = hashed_password.encode("utf-8")
-                return bcrypt.checkpw(pw_bytes, hash_bytes)
-            except Exception:
-                return False
-        return False
+    candidates = [plain_password]
+    if plain_password.strip() != plain_password:
+        candidates.append(plain_password.strip())
 
-    if hashed_password.startswith("sha256$"):
-        salt = "labelflow_secure_salt_2026"
-        expected = f"sha256${hashlib.sha256(f'{plain_password}:{salt}'.encode('utf-8')).hexdigest()}"
-        return hmac.compare_digest(hashed_password, expected)
+    for pw in candidates:
+        if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
+            if HAS_BCRYPT and bcrypt is not None:
+                try:
+                    pw_bytes = pw.encode("utf-8")
+                    hash_bytes = hashed_password.encode("utf-8")
+                    if bcrypt.checkpw(pw_bytes, hash_bytes):
+                        return True
+                except Exception:
+                    pass
+
+        if hashed_password.startswith("sha256$"):
+            salt = "labelflow_secure_salt_2026"
+            expected = f"sha256${hashlib.sha256(f'{pw}:{salt}'.encode('utf-8')).hexdigest()}"
+            if hmac.compare_digest(hashed_password, expected):
+                return True
 
     return False
 

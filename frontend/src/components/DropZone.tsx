@@ -7,12 +7,14 @@ interface DropZoneProps {
   onFilesSelected: (files: File[]) => void;
   onError: (message: string) => void;
   disabled?: boolean;
+  platformName?: string;
 }
 
 export const DropZone: React.FC<DropZoneProps> = ({
   onFilesSelected,
   onError,
   disabled = false,
+  platformName = "Meesho",
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -44,7 +46,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
     const errorMessages: string[] = [];
 
     for (const file of rawFiles) {
-      const validation = validateClientPdf(file, 50);
+      const validation = validateClientPdf(file, 2048);
       if (validation.valid) {
         validFiles.push(file);
       } else if (validation.error) {
@@ -94,7 +96,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
     <div
       role="button"
       tabIndex={0}
-      aria-label="Upload Meesho shipping label PDFs"
+      aria-label={`Upload ${platformName} shipping label PDFs`}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
       onDragEnter={handleDragEnter}
@@ -144,7 +146,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
         {/* Text Content */}
         <div>
           <h3 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white tracking-tight">
-            Drop your Meesho shipping label PDFs here
+            Drop your {platformName} shipping label PDFs here
           </h3>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5">
             or <span className="text-cyan-600 dark:text-cyan-neon font-medium underline underline-offset-4">browse files</span> from your computer
@@ -160,7 +162,7 @@ export const DropZone: React.FC<DropZoneProps> = ({
             Multi-file batching supported
           </span>
           <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-navy-900 border border-slate-200 dark:border-navy-700">
-            Up to 50 MB per file
+            100+ files & large batches supported
           </span>
         </div>
       </div>

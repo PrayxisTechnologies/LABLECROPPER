@@ -78,6 +78,13 @@ class UserResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6, description="New password (min 6 characters)")
 
 
+class VerifiedEmailLoginRequest(BaseModel):
+    """Payload for logging in with a verified email (via OTP or OAuth)."""
+
+    email: EmailStr = Field(..., description="Verified email address")
+    name: Optional[str] = Field(default=None, description="Optional user name")
+
+
 class UserResponse(BaseModel):
     """Public user profile data (never contains password hash)."""
 

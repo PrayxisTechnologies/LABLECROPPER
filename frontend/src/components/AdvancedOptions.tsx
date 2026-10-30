@@ -55,10 +55,30 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
   };
 
   const isSkuSorting =
-    config.sort_by === "sku" || config.sort_by === "sku_courier";
+    config.sort_by === "sku" ||
+    config.sort_by === "sku_courier" ||
+    config.sort_by === "marketplace_sku_courier" ||
+    config.sort_by === "sku_marketplace_courier" ||
+    config.sort_by === "courier_sku_marketplace" ||
+    config.sort_by === "courier_marketplace_sku" ||
+    config.sort_by === "sku_courier_marketplace";
 
   const getSortLabel = (sort: string) => {
     switch (sort) {
+      case "marketplace":
+        return "Platform First (Meesho → Flipkart → Snapdeal)";
+      case "marketplace_sku_courier":
+        return "Platform → SKU → Delivery partner";
+      case "marketplace_courier":
+        return "Platform → Delivery partner";
+      case "courier_sku_marketplace":
+        return "Delivery partner → SKU → Platform";
+      case "courier_marketplace_sku":
+        return "Delivery partner → Platform → SKU";
+      case "sku_marketplace_courier":
+        return "SKU → Platform → Delivery partner";
+      case "sku_courier_marketplace":
+        return "SKU → Delivery partner → Platform";
       case "sku":
         return "SKU";
       case "courier_partner":
@@ -166,16 +186,29 @@ export const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({
                   disabled={disabled}
                   className="w-full appearance-none bg-white dark:bg-navy-800 border border-slate-300 dark:border-navy-600 rounded-lg px-3 py-2 text-xs text-slate-800 dark:text-white focus:outline-none focus:border-cyan-neon pr-8 cursor-pointer disabled:opacity-50 font-medium"
                 >
-                  <option value="sku_courier">
-                    SKU + Delivery partner (Default — Brown&apos;s Valmo/Shadowfax, then Green)
-                  </option>
-                  <option value="original_order">
-                    Original order (input PDF sequence)
-                  </option>
-                  <option value="sku">SKU (group by Main SKU then variant)</option>
-                  <option value="courier_partner">
-                    Delivery partner (Valmo, Shadowfax, Xpress Bees...)
-                  </option>
+                  <optgroup label="🏪 Platform / Marketplace First (Meesho, fir Flipkart, fir Snapdeal)">
+                    <option value="marketplace">🏪 Platform First (All Meesho → Flipkart → Snapdeal)</option>
+                    <option value="marketplace_sku_courier">🏷️ Platform + SKU + Delivery Partner</option>
+                    <option value="marketplace_courier">🚚 Platform + Delivery Partner</option>
+                  </optgroup>
+                  <optgroup label="🚚 Delivery Partner Primary (Valmo, Shadowfax, Ekart...)">
+                    <option value="courier_sku_marketplace">🚚 Delivery Partner + SKU + Platform</option>
+                    <option value="courier_marketplace_sku">🚚 Delivery Partner + Platform + SKU</option>
+                    <option value="courier_partner">🚚 Delivery Partner Only (Valmo, Shadowfax...)</option>
+                  </optgroup>
+                  <optgroup label="📦 SKU / Product First">
+                    <option value="sku_marketplace_courier">📦 SKU + Platform + Delivery Partner</option>
+                    <option value="sku_courier_marketplace">🏷️ SKU + Delivery Partner + Platform</option>
+                    <option value="sku_courier">
+                      🏷️ SKU + Delivery partner (Standard)
+                    </option>
+                    <option value="sku">📦 SKU Variants Only</option>
+                  </optgroup>
+                  <optgroup label="📄 Document Order">
+                    <option value="original_order">
+                      📄 Original order (input PDF sequence)
+                    </option>
+                  </optgroup>
                 </select>
                 <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 pt-1 text-slate-400">
                   <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">

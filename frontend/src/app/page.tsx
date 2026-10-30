@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { HomeSeoContent } from "@/components/HomeSeoContent";
@@ -9,21 +10,46 @@ import { FileList } from "@/components/FileList";
 import { AdvancedOptions } from "@/components/AdvancedOptions";
 import { LabelPreviewer } from "@/components/LabelPreviewer";
 import { UploadSummaryCard } from "@/components/UploadSummaryCard";
+import { LabelProcessingHistory } from "@/components/LabelProcessingHistory";
+import { DuplicateLabelsAlert } from "@/components/DuplicateLabelsAlert";
+import { QuickLabelSearchModal } from "@/components/QuickLabelSearchModal";
+import { ExtensionSyncPanel } from "@/components/ExtensionSyncPanel";
 import {
   UploadedFileItem,
   ProcessingConfig,
   ProcessingJobResponse,
   SortOption,
 } from "@/lib/types";
+import { useAuth } from "@/lib/auth-context";
 import { formatBytes, generateFileId } from "@/lib/utils";
 import {
   checkBackendHealth,
+  getDownloadPdfUrl,
+  getViewPdfUrl,
   processLabelsOnBackend,
 } from "@/lib/api";
-import { apiResolveAmbiguity } from "@/lib/api-auth";
+import {
+  apiClaimLocalHistory,
+  apiClearAllJobs,
+  apiDeleteJob,
+  apiGetJobHistory,
+  apiResolveAmbiguity,
+  apiTrashJob,
+} from "@/lib/api-auth";
 import { DEFAULT_CONFIG, loadSavedConfig, saveUserConfig } from "@/lib/storage";
+import {
+  LocalProcessingItem,
+  clearAllLocalHistoryToTrash,
+  clearLocalProcessingHistory,
+  getLocalProcessingHistory,
+  moveLocalItemToTrash,
+  removeLocalProcessingItem,
+  saveLocalProcessingItem,
+  syncServerJobsToLocalHistory,
+} from "@/lib/localHistory";
 
 export default function HomePage() {
+  const { isAuthenticated } = useAuth();
   const [files, setFiles] = useState<UploadedFileItem[]>([]);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [backendVersion, setBackendVersion] = useState<string>("1.0.0");
@@ -35,15 +61,56 @@ export default function HomePage() {
 
   const [processingResult, setProcessingResult] =
     useState<ProcessingJobResponse | null>(null);
+  const [localHistory, setLocalHistory] = useState<LocalProcessingItem[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const generatorRef = useRef<HTMLDivElement>(null);
 
-  // Load saved preferences on client mount
+  // Load saved preferences & local 48-hour history on mount
   useEffect(() => {
     const saved = loadSavedConfig();
     setProcessingConfig(saved);
+    setLocalHistory(getLocalProcessingHistory());
   }, []);
+
+  // Sync server history and claim local guest items when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      (async () => {
+        try {
+          const localItems = getLocalProcessingHistory();
+          const jobIds = localItems.map((i) => i.job_id).filter(Boolean);
+          if (jobIds.length > 0) {
+            await apiClaimLocalHistory(jobIds);
+          }
+          const serverRes = await apiGetJobHistory(1, 20);
+          if (serverRes && Array.isArray(serverRes.items)) {
+            const synced = syncServerJobsToLocalHistory(serverRes.items);
+            setLocalHistory(synced);
+          }
+        } catch {
+          // Keep current local history on offline or error
+        }
+      })();
+    }
+  }, [isAuthenticated]);
+
+  const handleRemoveHistoryItem = (jobId: string) => {
+    moveLocalItemToTrash(jobId);
+    setLocalHistory(getLocalProcessingHistory());
+    if (isAuthenticated) {
+      apiTrashJob(jobId).catch(() => {});
+    }
+  };
+
+  const handleClearHistory = () => {
+    clearAllLocalHistoryToTrash();
+    setLocalHistory([]);
+    if (isAuthenticated) {
+      apiClearAllJobs().catch(() => {});
+    }
+  };
 
   // Check backend health on initial load and recurring interval
   useEffect(() => {
@@ -101,6 +168,30 @@ export default function HomePage() {
     try {
       const response = await processLabelsOnBackend(rawFiles, configToUse);
       setProcessingResult(response);
+
+      // Auto-save guest / local 48-hour processing history
+      const totalBytes = rawFiles.reduce((acc, f) => acc + f.size, 0);
+      const outputFilename =
+        response.formatted_filename || `${(response.marketplace || "meesho").toLowerCase()}1prayxis.pdf`;
+
+      const historyItem: LocalProcessingItem = {
+        id: response.job_id,
+        job_id: response.job_id,
+        filename: outputFilename,
+        original_files: rawFiles.map((f) => f.name),
+        created_at: Date.now(),
+        total_labels: response.total_labels_generated,
+        total_files: rawFiles.length,
+        formatted_size: formatBytes(totalBytes),
+        marketplace: response.marketplace || "Meesho",
+        type_badge: response.config.remove_invoice ? "Label Only" : "Full Label",
+        download_url: getDownloadPdfUrl(response.job_id),
+        view_url: getViewPdfUrl(response.job_id),
+      };
+
+      saveLocalProcessingItem(historyItem);
+      setLocalHistory(getLocalProcessingHistory());
+
       if (response.total_input_pages > 0) {
         setFiles((prev) =>
           prev.map((f) => ({ ...f, pageCount: response.total_input_pages }))
@@ -140,13 +231,142 @@ export default function HomePage() {
     if (additions.length > 0) {
       const updated = [...files, ...additions];
       setFiles(updated);
-      // Instant Single-Step: Auto-process immediately upon file intake!
+      // For a fresh upload, always start with 0 exclusions so all labels are processed
+      const cleanConfig: ProcessingConfig = files.length === 0 ? {
+        ...processingConfig,
+        excluded_main_skus: [],
+        excluded_skus: [],
+        excluded_couriers: [],
+      } : processingConfig;
+      if (files.length === 0) {
+        setProcessingConfig(cleanConfig);
+      }
       executeProcessing(
         updated.map((u) => u.file),
-        processingConfig
+        cleanConfig
       );
     }
   };
+
+  /**
+   * Dedicated Chrome Extension 1-Click Vault Import Handler
+   * Replaces any existing batch with incoming files directly without duplicate name filtering,
+   * resets exclusions, and triggers immediate cropping.
+   */
+  const handleExtensionImportFiles = async (incomingFiles: File[]) => {
+    if (!incomingFiles || incomingFiles.length === 0) return;
+    setErrorMessage(null);
+    setProcessingResult(null);
+
+    const newAdditions: UploadedFileItem[] = incomingFiles.map((file) => ({
+      id: generateFileId(),
+      file,
+      name: file.name,
+      size: file.size,
+      formattedSize: formatBytes(file.size),
+      status: "ready",
+      pageCount: undefined,
+    }));
+
+    setFiles(newAdditions);
+
+    const freshConfig: ProcessingConfig = {
+      ...processingConfig,
+      excluded_main_skus: [],
+      excluded_skus: [],
+      excluded_couriers: [],
+      excluded_order_ids: [],
+    };
+    setProcessingConfig(freshConfig);
+
+    const el = document.getElementById("generator");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    await executeProcessing(
+      newAdditions.map((u) => u.file),
+      freshConfig
+    );
+  };
+
+  // Global Window Message Listener for Chrome Extension (Always Active whether site is open, empty, or previewing)
+  useEffect(() => {
+    const handleExtensionMessage = (event: MessageEvent) => {
+      if (typeof window === "undefined") return;
+      if (event.origin !== window.location.origin) return;
+
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+
+      if (data.type === "LABELFLOW_VAULT_IMPORT") {
+        if (data._handledByPage) return;
+        data._handledByPage = true;
+
+        const incomingFiles = (data.files || []) as Array<{
+          id: string;
+          name: string;
+          size: number;
+          type: string;
+          base64?: string;
+          buffer?: ArrayBuffer;
+        }>;
+
+        if (!incomingFiles || incomingFiles.length === 0) return;
+
+        try {
+          const reconstructed: File[] = incomingFiles.map((item) => {
+            let blob: Blob;
+            if (item.base64 && typeof item.base64 === "string") {
+              const binaryString = atob(item.base64);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              blob = new Blob([bytes], { type: item.type || "application/pdf" });
+            } else if (
+              item.buffer &&
+              (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))
+            ) {
+              blob = new Blob([item.buffer], { type: item.type || "application/pdf" });
+            } else {
+              throw new Error(`File payload for "${item.name}" has no valid binary data.`);
+            }
+
+            return new File([blob], item.name, {
+              type: item.type || "application/pdf",
+              lastModified: Date.now(),
+            });
+          });
+
+          if (reconstructed.length > 0) {
+            handleExtensionImportFiles(reconstructed);
+
+            const fileIds = incomingFiles.map((i) => i.id).filter(Boolean);
+            if (fileIds.length > 0) {
+              window.postMessage(
+                {
+                  source: "LABELFLOW_WEBSITE",
+                  type: "LABELFLOW_PROCESSING_SUCCESS",
+                  fileIds: fileIds,
+                },
+                window.location.origin
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Failed to reconstruct extension files:", err);
+        }
+      }
+    };
+
+    window.addEventListener("message", handleExtensionMessage);
+    window.postMessage({ type: "LABELFLOW_PAGE_READY" }, window.location.origin);
+
+    return () => {
+      window.removeEventListener("message", handleExtensionMessage);
+    };
+  }, [processingConfig]);
 
   const handleRemoveFile = (id: string) => {
     const remaining = files.filter((item) => item.id !== id);
@@ -165,6 +385,26 @@ export default function HomePage() {
     setFiles([]);
     setProcessingResult(null);
     setErrorMessage(null);
+    setProcessingConfig((prev) => ({
+      ...prev,
+      excluded_main_skus: [],
+      excluded_skus: [],
+      excluded_couriers: [],
+      excluded_order_ids: [],
+    }));
+  };
+
+  const handleResetBatch = () => {
+    setProcessingResult(null);
+    setFiles([]);
+    setErrorMessage(null);
+    setProcessingConfig((prev) => ({
+      ...prev,
+      excluded_main_skus: [],
+      excluded_skus: [],
+      excluded_couriers: [],
+      excluded_order_ids: [],
+    }));
   };
 
   const handleHeroUploadClick = () => {
@@ -185,25 +425,96 @@ export default function HomePage() {
     excluded_main_skus,
     excluded_skus,
     excluded_couriers,
+    excluded_marketplaces = [],
+    smart_sku_detection,
   }: {
     sort: SortOption;
     excluded_main_skus: string[];
     excluded_skus: string[];
     excluded_couriers: string[];
+    excluded_marketplaces?: string[];
+    smart_sku_detection?: boolean;
   }) => {
     const updatedConfig: ProcessingConfig = {
       ...processingConfig,
       sort_by: sort,
       enable_sku_picklist:
-        sort === "sku" || sort === "sku_courier"
+        sort === "sku" ||
+        sort === "sku_courier" ||
+        sort === "marketplace_sku_courier" ||
+        sort === "sku_marketplace_courier" ||
+        sort === "courier_sku_marketplace" ||
+        sort === "courier_marketplace_sku" ||
+        sort === "sku_courier_marketplace"
           ? true
           : processingConfig.enable_sku_picklist,
+      smart_sku_detection:
+        smart_sku_detection !== undefined
+          ? smart_sku_detection
+          : processingConfig.smart_sku_detection,
       excluded_main_skus,
       excluded_skus,
       excluded_couriers,
+      excluded_marketplaces,
+      excluded_order_ids: processingConfig.excluded_order_ids || [],
     };
     setProcessingConfig(updatedConfig);
     saveUserConfig(updatedConfig);
+    if (files.length > 0) {
+      executeProcessing(
+        files.map((f) => f.file),
+        updatedConfig
+      );
+    }
+  };
+
+  // Exclude all duplicate labels in one click
+  const handleExcludeAllDuplicates = () => {
+    if (!processingResult || !processingResult.duplicate_labels) return;
+    const allDupIds = processingResult.duplicate_labels
+      .map((d) => d.order_id || d.wbl_id || "")
+      .filter(Boolean);
+    const updatedOrderExclusions = Array.from(
+      new Set([...(processingConfig.excluded_order_ids || []), ...allDupIds])
+    );
+    const updatedConfig: ProcessingConfig = {
+      ...processingConfig,
+      excluded_order_ids: updatedOrderExclusions,
+    };
+    setProcessingConfig(updatedConfig);
+    if (files.length > 0) {
+      executeProcessing(
+        files.map((f) => f.file),
+        updatedConfig
+      );
+    }
+  };
+
+  // Exclude selected duplicate labels from modal
+  const handleExcludeSelectedDuplicates = (orderIds: string[]) => {
+    const updatedOrderExclusions = Array.from(
+      new Set([...(processingConfig.excluded_order_ids || []), ...orderIds])
+    );
+    const updatedConfig: ProcessingConfig = {
+      ...processingConfig,
+      excluded_order_ids: updatedOrderExclusions,
+    };
+    setProcessingConfig(updatedConfig);
+    if (files.length > 0) {
+      executeProcessing(
+        files.map((f) => f.file),
+        updatedConfig
+      );
+    }
+  };
+
+  // Restore excluded duplicate labels
+  const handleRestoreDuplicates = () => {
+    const updatedConfig: ProcessingConfig = {
+      ...processingConfig,
+      excluded_order_ids: [],
+    };
+    setProcessingConfig(updatedConfig);
     if (files.length > 0) {
       executeProcessing(
         files.map((f) => f.file),
@@ -220,30 +531,71 @@ export default function HomePage() {
     );
   };
 
-  const handleConfirmSku = async ({
-    oldSku,
-    newSku,
-    keyword,
-  }: {
-    oldSku: string;
-    newSku: string;
-    keyword: string;
-  }) => {
+  const handleConfirmSku = async (
+    param:
+      | {
+          oldSku: string;
+          newSku: string;
+          keyword: string;
+        }
+      | {
+          resolutions: Array<{
+            oldSku: string;
+            newSku: string;
+            keyword: string;
+          }>;
+        }
+  ) => {
     if (!processingResult) return;
     setIsProcessing(true);
     setErrorMessage(null);
 
     try {
-      const resolution = {
-        raw_product_text: oldSku,
-        chosen_sku: newSku,
-        matching_keyword: keyword || oldSku,
-        remember_rule: true,
-        job_id: processingResult.job_id,
-      };
+      let finalResolutions: Array<{
+        raw_product_text: string;
+        chosen_sku: string;
+        matching_keyword: string;
+        remember_rule: boolean;
+        job_id: string;
+      }> = [];
 
-      const updated = await apiResolveAmbiguity(processingResult.job_id, [resolution]);
-      setProcessingResult(updated);
+      if ("resolutions" in param && Array.isArray(param.resolutions)) {
+        for (const item of param.resolutions) {
+          const kws = (item.keyword || item.oldSku)
+            .split(/[,;\n\r]+/)
+            .map((k) => k.trim())
+            .filter(Boolean);
+          const uniqueKws = kws.length > 0 ? Array.from(new Set(kws)) : [item.oldSku];
+          for (const kw of uniqueKws) {
+            finalResolutions.push({
+              raw_product_text: item.oldSku,
+              chosen_sku: item.newSku,
+              matching_keyword: kw,
+              remember_rule: true,
+              job_id: processingResult.job_id,
+            });
+          }
+        }
+      } else if ("oldSku" in param) {
+        const { oldSku, newSku, keyword } = param;
+        const kws = (keyword || oldSku)
+          .split(/[,;\n\r]+/)
+          .map((k) => k.trim())
+          .filter(Boolean);
+        const uniqueKws = kws.length > 0 ? Array.from(new Set(kws)) : [oldSku];
+        finalResolutions = uniqueKws.map((kw) => ({
+          raw_product_text: oldSku,
+          chosen_sku: newSku,
+          matching_keyword: kw,
+          remember_rule: true,
+          job_id: processingResult.job_id,
+        }));
+      }
+
+      if (finalResolutions.length > 0) {
+        const updated = await apiResolveAmbiguity(processingResult.job_id, finalResolutions);
+        setProcessingResult(updated);
+      }
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -253,12 +605,6 @@ export default function HomePage() {
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const handleResetBatch = () => {
-    setProcessingResult(null);
-    setFiles([]);
-    setErrorMessage(null);
   };
 
   return (
@@ -286,33 +632,63 @@ export default function HomePage() {
         className="hidden"
       />
 
-      {/* Active Processing Result: Full-Page Workspace + Top Summary with Live Re-Sort */}
+      {/* Active Processing Result: Side-by-Side Workspace (Left = SKU Filters, Right = Generated Label) */}
       {processingResult ? (
-        <div className="w-full flex-1 flex flex-col px-2 sm:px-4 lg:px-8 py-2 space-y-4 animate-in fade-in duration-200">
-          {/* Top: Instant SKU & Delivery Partner Summary with Direct Sort & Edit Controls */}
-          <UploadSummaryCard
-            data={{
-              total_files: processingResult.total_files,
-              total_pages: processingResult.total_input_pages,
-              total_labels: processingResult.total_labels_generated,
-              courier_breakdown: processingResult.courier_breakdown,
-              main_skus: processingResult.main_skus || [],
-              all_skus: processingResult.all_skus || [],
-            }}
-            currentSort={processingConfig.sort_by as SortOption}
-            isReSorting={isProcessing}
-            activeExcludedMainSkus={processingConfig.excluded_main_skus || []}
-            activeExcludedSkus={processingConfig.excluded_skus || []}
-            activeExcludedCouriers={processingConfig.excluded_couriers || []}
-            onUpdateBatch={handleUpdateBatch}
-            onConfirmSku={handleConfirmSku}
+        <div className="w-full flex-1 px-2 sm:px-4 lg:px-6 py-2 space-y-4 animate-in fade-in duration-200">
+          {/* Duplicate Orders Detection Banner & Inspector */}
+          <DuplicateLabelsAlert
+            duplicateLabels={processingResult.duplicate_labels || []}
+            allLabelsDuplicate={Boolean(processingResult.all_labels_duplicate)}
+            excludedDuplicatesCount={processingResult.excluded_duplicates_count || 0}
+            totalLabelsGenerated={processingResult.total_labels_generated}
+            onExcludeAllDuplicates={handleExcludeAllDuplicates}
+            onExcludeSelectedDuplicates={handleExcludeSelectedDuplicates}
+            onResetBatch={handleResetBatch}
+            onRestoreDuplicates={handleRestoreDuplicates}
           />
 
-          {/* Complete In-Browser 4×6 Label Workspace */}
-          <LabelPreviewer
-            result={processingResult}
-            onReset={handleResetBatch}
-          />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 items-stretch">
+            {/* Left Side: SKU Filters, Delivery Partners & Sort Controls (Half Screen: 6/12) */}
+            <div className="lg:col-span-6 xl:col-span-6 flex flex-col h-[calc(100vh-95px)] min-h-[700px]">
+              <UploadSummaryCard
+                data={{
+                  total_files: processingResult.total_files,
+                  total_pages: processingResult.total_input_pages,
+                  total_labels: processingResult.total_labels_generated,
+                  courier_breakdown: processingResult.courier_breakdown,
+                  marketplace_breakdown: processingResult.marketplace_breakdown || [],
+                  main_skus: processingResult.main_skus || [],
+                  all_skus: processingResult.all_skus || [],
+                }}
+                currentSort={processingConfig.sort_by as SortOption}
+                isReSorting={isProcessing}
+                activeExcludedMainSkus={processingConfig.excluded_main_skus || []}
+                activeExcludedSkus={processingConfig.excluded_skus || []}
+                activeExcludedCouriers={processingConfig.excluded_couriers || []}
+                activeExcludedMarketplaces={processingConfig.excluded_marketplaces || []}
+                smartSkuDetection={Boolean(processingConfig.smart_sku_detection)}
+                onUpdateBatch={handleUpdateBatch}
+                onConfirmSku={handleConfirmSku}
+              />
+            </div>
+
+            {/* Right Side: Generated 4×6 Label Document Workspace (Half Screen: 6/12) */}
+            <div className="lg:col-span-6 xl:col-span-6 flex flex-col h-[calc(100vh-95px)] min-h-[700px]">
+              <LabelPreviewer
+                result={processingResult}
+                onReset={handleResetBatch}
+              />
+            </div>
+          </div>
+
+          {/* Local 48-Hour Processing History */}
+          <div className="w-full pt-2">
+            <LabelProcessingHistory
+              history={localHistory}
+              onRemoveItem={handleRemoveHistoryItem}
+              onClearAll={handleClearHistory}
+            />
+          </div>
         </div>
       ) : (
         <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-12 w-full">
@@ -368,6 +744,39 @@ export default function HomePage() {
                 >
                   Features & Details
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSearchModal(true)}
+                  className="px-5 py-3 rounded-xl bg-cyan-50 dark:bg-cyan-neon/15 hover:bg-cyan-100 dark:hover:bg-cyan-neon/25 text-cyan-800 dark:text-cyan-neon border border-cyan-200 dark:border-cyan-neon/40 text-sm font-semibold transition-all flex items-center space-x-2 shadow-sm cursor-pointer"
+                  title="Search labels by Order ID, WBL Tracking ID, or SKU"
+                >
+                  <svg className="w-4 h-4 text-cyan-600 dark:text-cyan-neon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <span>Search Labels</span>
+                </button>
+              </div>
+
+              {/* Supported Marketplaces Quick Switcher */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 text-xs text-slate-500 dark:text-slate-400">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Marketplaces:</span>
+                <Link href="/meesho-label-cropper" className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 hover:bg-cyan-50 dark:hover:bg-cyan-neon/15 hover:text-cyan-600 dark:hover:text-cyan-neon font-medium transition-colors border border-slate-200 dark:border-navy-700">
+                  Meesho
+                </Link>
+                <Link href="/flipkart-label-cropper" className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 hover:bg-cyan-50 dark:hover:bg-cyan-neon/15 hover:text-cyan-600 dark:hover:text-cyan-neon font-medium transition-colors border border-slate-200 dark:border-navy-700">
+                  Flipkart
+                </Link>
+                <Link href="/snapdeal-label-cropper" className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 hover:bg-cyan-50 dark:hover:bg-cyan-neon/15 hover:text-cyan-600 dark:hover:text-cyan-neon font-medium transition-colors border border-slate-200 dark:border-navy-700">
+                  Snapdeal
+                </Link>
+                <Link href="/amazon" className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 hover:bg-cyan-50 dark:hover:bg-cyan-neon/15 hover:text-cyan-600 dark:hover:text-cyan-neon font-medium transition-colors border border-slate-200 dark:border-navy-700">
+                  Amazon
+                </Link>
+                <Link href="/myntra" className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 hover:bg-cyan-50 dark:hover:bg-cyan-neon/15 hover:text-cyan-600 dark:hover:text-cyan-neon font-medium transition-colors border border-slate-200 dark:border-navy-700">
+                  Myntra
+                </Link>
               </div>
             </div>
 
@@ -496,6 +905,43 @@ export default function HomePage() {
             className="space-y-5"
           >
             <div className="space-y-4">
+              {/* Quick Label Search Bar Trigger */}
+              <div
+                onClick={() => setShowSearchModal(true)}
+                className="w-full p-3 sm:p-3.5 rounded-2xl bg-white dark:bg-[#0C182B] border border-slate-200 dark:border-navy-700/80 hover:border-cyan-500/50 dark:hover:border-cyan-neon/50 shadow-sm transition-all cursor-pointer flex items-center justify-between group"
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") setShowSearchModal(true);
+                }}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-500/10 dark:bg-cyan-neon/15 flex items-center justify-center text-cyan-600 dark:text-cyan-neon">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 group-hover:text-cyan-600 dark:group-hover:text-cyan-neon transition-colors">
+                      Quick Search Any Label...
+                    </span>
+                    <span className="hidden sm:inline text-xs text-slate-400 dark:text-slate-500 ml-2">
+                      (Search by Order ID, WBL Tracking No., or SKU)
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-navy-800 text-slate-600 dark:text-slate-300 group-hover:bg-cyan-500 group-hover:text-navy-950 transition-colors">
+                  Search ↵
+                </span>
+              </div>
+
+              {/* Chrome Extension 1-Click Auto-Cropper Sync Panel */}
+              <ExtensionSyncPanel
+                onImportFiles={handleExtensionImportFiles}
+                isProcessing={isProcessing}
+              />
+
               {/* PDF Dropzone Target */}
               <DropZone
                 onFilesSelected={handleFilesSelected}
@@ -513,23 +959,23 @@ export default function HomePage() {
 
               {/* High-speed Single-Step Processing Progress Indicator */}
               {isProcessing && (
-                <div className="w-full bg-[#0C182B] border border-cyan-neon/40 rounded-2xl p-5 shadow-xl animate-in fade-in duration-150">
+                <div className="w-full bg-white dark:bg-[#0C182B] border border-cyan-500/40 dark:border-cyan-neon/40 rounded-2xl p-5 shadow-xl animate-in fade-in duration-150">
                   <div className="flex items-center space-x-3">
-                    <div className="w-6 h-6 border-3 border-cyan-neon border-t-transparent rounded-full animate-spin" />
+                    <div className="w-6 h-6 border-3 border-cyan-600 dark:border-cyan-neon border-t-transparent rounded-full animate-spin" />
                     <div>
-                      <h4 className="text-sm sm:text-base font-bold text-white flex items-center space-x-2">
+                      <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center space-x-2">
                         <span>Cropping & Organizing Labels...</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-neon/15 text-cyan-neon font-mono">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-neon/15 text-cyan-700 dark:text-cyan-neon font-mono">
                           Fast Pipeline
                         </span>
                       </h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
                         Extracting 4×6 thermal pages • Grouping by Main SKU & Delivery Partner
                       </p>
                     </div>
                   </div>
-                  <div className="w-full bg-navy-800 h-1.5 rounded-full overflow-hidden mt-3.5">
-                    <div className="bg-gradient-to-r from-cyan-neon to-purple-brand h-full w-3/4 animate-pulse rounded-full" />
+                  <div className="w-full bg-slate-200 dark:bg-navy-800 h-1.5 rounded-full overflow-hidden mt-3.5">
+                    <div className="bg-gradient-to-r from-cyan-500 via-cyan-400 to-purple-brand h-full w-3/4 animate-pulse rounded-full" />
                   </div>
                 </div>
               )}
@@ -554,6 +1000,13 @@ export default function HomePage() {
                 </div>
               )}
             </div>
+
+            {/* Local 48-Hour Processing History Card */}
+            <LabelProcessingHistory
+              history={localHistory}
+              onRemoveItem={handleRemoveHistoryItem}
+              onClearAll={handleClearHistory}
+            />
           </section>
 
           {/* 3 Compact Benefit Items */}
@@ -628,6 +1081,12 @@ export default function HomePage() {
           <HomeSeoContent />
         </main>
       )}
+
+      {/* Quick Label Search Modal */}
+      <QuickLabelSearchModal
+        isOpen={showSearchModal}
+        onClose={() => setShowSearchModal(false)}
+      />
 
       {/* Global Professional Footer */}
       <Footer />

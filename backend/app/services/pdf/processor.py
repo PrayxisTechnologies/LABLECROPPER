@@ -1,5 +1,6 @@
 """LabelFlow batch PDF processing orchestrator with Smart SKU Intelligence."""
 
+import asyncio
 import json
 import os
 import re
@@ -17,7 +18,9 @@ from app.schemas.decision import AmbiguousLabelItem
 from app.schemas.processing import (
     CourierSummary,
     DownloadLinks,
+    DuplicateLabelItem,
     ExtractedSKU,
+    MarketplaceSummary,
     PageProcessingRecord,
     PicklistItem,
     ProcessingConfig,
@@ -43,37 +46,52 @@ def extract_smart_sku_candidates(raw_sku: str) -> Tuple[str, str, List[str]]:
     clean_raw = raw_sku.strip()
     upper_raw = clean_raw.upper()
 
-    # 1. Check for known colors
+    # 1. Tokenize by space, underscore, dash, slash, dot
+    raw_tokens = [t.strip() for t in re.split(r"[\s_\-\/\.]+", clean_raw) if len(t.strip()) >= 2]
+    # Filter pure digits
+    word_tokens = [t for t in raw_tokens if not t.isdigit()]
+
+    # 2. Check for known colors
     found_colors: List[str] = []
     for c in COLOR_KEYWORDS:
         if re.search(rf"\b{c}\b", upper_raw) or (c in upper_raw and len(c) >= 4):
             if c not in found_colors:
                 found_colors.append(c)
 
-    # 2. Tokenize by space, underscore, dash, slash, dot
-    raw_tokens = [t.strip() for t in re.split(r"[\s_\-\/\.]+", clean_raw) if len(t.strip()) >= 2]
-    # Filter pure digits
-    word_tokens = [t for t in raw_tokens if not t.isdigit()]
-
     candidates: List[str] = []
 
-    # Priority A: Colors (e.g. GREEN, BROWN)
+    # Priority A: If first token is a brand/product word (e.g. 'Rospack' in 'Rospack Brown 80ml'), it takes top priority
+    if word_tokens:
+        first_w = word_tokens[0]
+        first_w_upper = first_w.upper()
+        is_first_color = any(
+            c == first_w_upper or (len(c) >= 4 and c in first_w_upper)
+            for c in COLOR_KEYWORDS
+        )
+        if not is_first_color:
+            candidates.append(first_w)
+            if len(word_tokens) >= 2:
+                combo = f"{first_w} {word_tokens[1]}"
+                if combo.upper() not in [c.upper() for c in candidates]:
+                    candidates.append(combo)
+
+    # Priority B: Colors (e.g. GREEN, BROWN)
     for fc in found_colors:
-        if fc not in candidates:
+        if fc.upper() not in [c.upper() for c in candidates]:
             candidates.append(fc)
 
-    # Priority B: Individual significant words (e.g. RSPK, Rospack)
+    # Priority C: Remaining individual significant words (e.g. RSPK, Rospack)
     for wt in word_tokens:
         if wt.upper() not in [c.upper() for c in candidates]:
             candidates.append(wt)
 
-    # Priority C: Multi-word combinations (e.g. "RSPK GREEN")
+    # Priority D: Multi-word combinations (e.g. "RSPK GREEN")
     if len(word_tokens) >= 2:
         combo = " ".join(word_tokens[:2])
         if combo.upper() not in [c.upper() for c in candidates]:
             candidates.append(combo)
 
-    # Priority D: Full original SKU
+    # Priority E: Full original SKU
     if clean_raw.upper() not in [c.upper() for c in candidates]:
         candidates.append(clean_raw)
 
@@ -97,6 +115,7 @@ class PDFBatchProcessor:
         user_decisions: Optional[List[Dict[str, Any]]] = None,
         user_id: Optional[str] = None,
         marketplace: Optional[str] = None,
+        recent_job_ids: Optional[List[str]] = None,
     ) -> ProcessingJobResponse:
         """Execute full Phase 2 processing workflow across uploaded files with SKU intelligence."""
         job_id = f"job_{uuid.uuid4().hex[:12]}"
@@ -113,6 +132,10 @@ class PDFBatchProcessor:
             len(files),
             bool(user_id),
         )
+
+        # Build reference lookup of previously processed orders (populated via high-speed targeted batch query)
+        previous_orders_map: Dict[str, Dict[str, Any]] = {}
+        db = get_db()
 
         # Initialize SKU intelligence engine if user SKUs are provided
         sku_engine: Optional[SKUIntelligenceEngine] = None
@@ -132,6 +155,8 @@ class PDFBatchProcessor:
         page_records: List[PageProcessingRecord] = []
         ambiguous_labels: List[AmbiguousLabelItem] = []
         seen_ambiguous_signatures: Set[str] = set()
+        detected_duplicates: List[DuplicateLabelItem] = []
+        seen_duplicate_keys: Set[str] = set()
 
         # Keep open source fitz documents mapped by filename to render after sorting
         open_docs: Dict[str, fitz.Document] = {}
@@ -179,7 +204,8 @@ class PDFBatchProcessor:
 
                     # Extract SKUs using Smart Intelligence or fallback regex
                     sku_items, order_id = picklist_generator_service.extract_skus(
-                        inspection.full_text
+                        inspection.full_text,
+                        known_wbl_id=wbl_id,
                     )
                     raw_sku = sku_items[0].sku if sku_items else "UNMATCHED"
 
@@ -190,12 +216,16 @@ class PDFBatchProcessor:
 
                     if sku_engine:
                         matched_sku, match_type, conf, is_ambiguous, candidates = (
-                            sku_engine.match_label_text(inspection.full_text)
+                            sku_engine.match_label_text(
+                                inspection.full_text,
+                                candidate_sku=raw_sku if raw_sku != "UNMATCHED" else None,
+                            )
                         )
                         if matched_sku:
                             intel_sku = ExtractedSKU(
-                                sku=matched_sku,
+                                sku=raw_sku if raw_sku != "UNMATCHED" else matched_sku,
                                 quantity=sku_items[0].quantity if sku_items else 1,
+                                description=matched_sku,
                                 order_id=order_id,
                                 match_type=match_type,
                                 confidence=conf,
@@ -207,8 +237,17 @@ class PDFBatchProcessor:
                             raw_sku_text = sku_items[0].sku
                             default_sku, default_kw, candidates = extract_smart_sku_candidates(raw_sku_text)
                             is_ambiguous = True
-                            matched_sku = default_sku
+                            matched_sku = "UNKNOWN"
                             matched_kw = default_kw
+                            intel_sku = ExtractedSKU(
+                                sku=raw_sku,
+                                quantity=sku_items[0].quantity,
+                                description="UNKNOWN",
+                                order_id=order_id,
+                                match_type="unrecognized",
+                                confidence=0.0,
+                            )
+                            sku_items = [intel_sku]
                     elif user_id and sku_items and raw_sku != "UNMATCHED":
                         # User is logged in, but has no saved SKUs yet:
                         # Parse candidates so user can confirm new SKU and save to personal database
@@ -230,33 +269,14 @@ class PDFBatchProcessor:
 
                     # Case A: Standalone Tax Invoice page
                     if inspection.layout_type == "tax_invoice":
-                        if config.remove_invoice and can_remove_invoice:
+                        if config.remove_invoice:
                             is_invoice_removed = True
                             total_invoices_removed += 1
                         else:
-                            is_label_extracted = True
-                            if not can_remove_invoice:
-                                is_flagged = True
-                                review_reason = safety_reason
-                                total_pages_flagged += 1
-                                warnings.append(
-                                    f"[{filename} p.{pno+1}] Invoice page retained: {safety_reason}"
-                                )
-
-                            candidate_labels.append({
-                                "filename": filename,
-                                "pno": pno,
-                                "crop_box": fitz.Rect(0, 0, inspection.width, inspection.height),
-                                "courier_partner": courier,
-                                "wbl_id": wbl_id,
-                                "order_id": order_id,
-                                "raw_sku": raw_sku,
-                                "sku_items": sku_items,
-                                "is_flagged": is_flagged,
-                                "review_reason": review_reason,
-                                "original_index": len(candidate_labels),
-                                "raw_text": inspection.full_text[:400],
-                            })
+                            # User unchecked remove_invoice: invoice is kept in file, but NEVER treated as a shipping label
+                            warnings.append(
+                                f"[{filename} p.{pno+1}] Standalone invoice page retained as requested."
+                            )
 
                     # Case B: Split page (Top Label, Bottom Invoice)
                     elif inspection.layout_type == "split_label_invoice":
@@ -264,7 +284,14 @@ class PDFBatchProcessor:
                             is_label_extracted = True
                             is_invoice_removed = True
                             total_invoices_removed += 1
-                            crop_box = inspection.label_rect or fitz.Rect(0, 0, inspection.width, inspection.height * 0.52)
+                            if inspection.label_rect:
+                                crop_box = inspection.label_rect
+                            elif getattr(inspection, "marketplace", "").lower() == "flipkart":
+                                crop_box = pdf_inspector.detect_flipkart_label_rect(src_page, inspection.width, inspection.height)
+                            elif getattr(inspection, "marketplace", "").lower() == "snapdeal":
+                                crop_box = pdf_inspector.detect_snapdeal_label_rect(src_page, inspection.width, inspection.height)
+                            else:
+                                crop_box = fitz.Rect(0, 0, inspection.width, inspection.height * 0.52)
 
                             candidate_labels.append({
                                 "filename": filename,
@@ -278,7 +305,8 @@ class PDFBatchProcessor:
                                 "is_flagged": False,
                                 "review_reason": None,
                                 "original_index": len(candidate_labels),
-                                "raw_text": inspection.full_text[:400],
+                                "raw_text": inspection.full_text[:2000],
+                                "marketplace": getattr(inspection, "marketplace", "Meesho") or "Meesho",
                             })
                         else:
                             is_label_extracted = True
@@ -301,7 +329,8 @@ class PDFBatchProcessor:
                                 "is_flagged": is_flagged,
                                 "review_reason": review_reason,
                                 "original_index": len(candidate_labels),
-                                "raw_text": inspection.full_text[:400],
+                                "raw_text": inspection.full_text[:2000],
+                                "marketplace": getattr(inspection, "marketplace", "Meesho") or "Meesho",
                             })
 
                     # Case C: Full shipping label or ambiguous page
@@ -328,7 +357,8 @@ class PDFBatchProcessor:
                             "is_flagged": inspection.is_flagged_for_review,
                             "review_reason": inspection.review_reason,
                             "original_index": len(candidate_labels),
-                            "raw_text": inspection.full_text[:400],
+                            "raw_text": inspection.full_text[:2000],
+                            "marketplace": getattr(inspection, "marketplace", "Meesho") or "Meesho",
                         })
 
                     if is_label_extracted and is_ambiguous and candidates:
@@ -380,17 +410,152 @@ class PDFBatchProcessor:
                             courier_partner=courier,
                             courier_confidence=confidence,
                             sku_items=sku_items,
+                            marketplace=getattr(inspection, "marketplace", "Meesho") or "Meesho",
                             dimensions_pt=[round(inspection.width, 1), round(inspection.height, 1)],
                         )
                     )
+
+            # 3b. High-Speed Targeted Duplicate Check (Only queries exact order IDs in this batch)
+            batch_order_ids = {
+                (c.get("order_id") or "").strip().upper()
+                for c in candidate_labels
+                if (c.get("order_id") or "").strip()
+            }
+            batch_wbl_ids = {
+                (c.get("wbl_id") or "").strip().upper()
+                for c in candidate_labels
+                if (c.get("wbl_id") or "").strip()
+            }
+
+            if user_id and db is not None and (batch_order_ids or batch_wbl_ids):
+                try:
+                    or_queries = []
+                    if batch_order_ids:
+                        or_queries.append({"order_id": {"$in": list(batch_order_ids)}})
+                    if batch_wbl_ids:
+                        or_queries.append({"wbl_id": {"$in": list(batch_wbl_ids)}})
+
+                    user_clauses = [{"user_id": str(user_id)}]
+                    try:
+                        user_clauses.append({"user_id": ObjectId(user_id)})
+                    except Exception:
+                        pass
+
+                    dup_query = {
+                        "$and": [
+                            {"$or": user_clauses},
+                            {"$or": or_queries},
+                            {"is_trashed": {"$ne": True}},
+                        ]
+                    }
+                    cursor = db.master_labels.find(
+                        dup_query,
+                        projection={
+                            "order_id": 1,
+                            "wbl_id": 1,
+                            "sku": 1,
+                            "courier_partner": 1,
+                            "appearances": 1,
+                            "last_processed_at": 1,
+                        },
+                    )
+                    async for m_doc in cursor:
+                        apps = [a for a in m_doc.get("appearances", []) if not a.get("is_trashed")]
+                        if not apps:
+                            continue
+                        prev_app = apps[-1]
+                        ord_id = (m_doc.get("order_id") or "").strip().upper()
+                        w_id = (m_doc.get("wbl_id") or "").strip().upper()
+                        info = {
+                            "order_id": m_doc.get("order_id"),
+                            "wbl_id": m_doc.get("wbl_id"),
+                            "sku": m_doc.get("sku") or "UNMATCHED",
+                            "courier": m_doc.get("courier_partner") or "Unassigned",
+                            "previous_job_id": prev_app.get("job_id"),
+                            "previous_filename": prev_app.get("pdf_filename") or prev_app.get("input_filename"),
+                            "previous_processed_at": m_doc.get("last_processed_at") or prev_app.get("created_at"),
+                        }
+                        if ord_id:
+                            previous_orders_map[ord_id] = info
+                        if w_id:
+                            previous_orders_map[w_id] = info
+                except Exception as e_ms:
+                    logger.warning("Error fetching master_labels for duplicate check: %s", str(e_ms))
+            elif recent_job_ids and (batch_order_ids or batch_wbl_ids):
+                for r_job_id in recent_job_ids[:5]:
+                    if not r_job_id or r_job_id == job_id:
+                        continue
+                    if (base_storage / "jobs" / r_job_id / "trashed.txt").exists():
+                        continue
+                    r_cand_file = base_storage / "jobs" / r_job_id / "candidate_labels.json"
+                    if not r_cand_file.exists():
+                        continue
+                    try:
+                        with open(r_cand_file, "r", encoding="utf-8") as cf:
+                            cands = json.load(cf)
+                            for c_item in cands:
+                                c_ord = (c_item.get("order_id") or "").strip().upper()
+                                c_wbl = (c_item.get("wbl_id") or "").strip().upper()
+                                if (c_ord and c_ord in batch_order_ids) or (c_wbl and c_wbl in batch_wbl_ids):
+                                    cand_info = {
+                                        "order_id": c_item.get("order_id"),
+                                        "wbl_id": c_item.get("wbl_id"),
+                                        "sku": c_item.get("raw_sku") or "UNMATCHED",
+                                        "courier": c_item.get("courier_partner") or "Unassigned",
+                                        "previous_job_id": r_job_id,
+                                        "previous_filename": f"{r_job_id}.pdf",
+                                        "previous_processed_at": None,
+                                    }
+                                    if c_ord and c_ord not in previous_orders_map:
+                                        previous_orders_map[c_ord] = cand_info
+                                    if c_wbl and c_wbl not in previous_orders_map:
+                                        previous_orders_map[c_wbl] = cand_info
+                    except Exception:
+                        pass
+
+            # Detect duplicates for all candidate labels
+            for c in candidate_labels:
+                clean_ord = (c.get("order_id") or "").strip().upper()
+                clean_wbl = (c.get("wbl_id") or "").strip().upper()
+                dup_info = previous_orders_map.get(clean_ord) or previous_orders_map.get(clean_wbl)
+                if dup_info:
+                    dup_key = f"{clean_ord}_{clean_wbl}_{c.get('filename')}_{c.get('pno')}"
+                    if dup_key not in seen_duplicate_keys:
+                        seen_duplicate_keys.add(dup_key)
+                        detected_duplicates.append(
+                            DuplicateLabelItem(
+                                order_id=c.get("order_id") or dup_info.get("order_id") or f"AWB_{clean_wbl}",
+                                wbl_id=clean_wbl or dup_info.get("wbl_id"),
+                                sku=c.get("raw_sku") if c.get("raw_sku") != "UNMATCHED" else (dup_info.get("sku") or "UNMATCHED"),
+                                courier=c.get("courier_partner") if c.get("courier_partner") != "Unassigned" else (dup_info.get("courier") or "Unassigned"),
+                                input_filename=c.get("filename"),
+                                page_number=c.get("pno", 0) + 1,
+                                previous_job_id=dup_info.get("previous_job_id"),
+                                previous_filename=dup_info.get("previous_filename"),
+                                previous_processed_at=dup_info.get("previous_processed_at"),
+                            )
+                        )
 
             # 4. Filter candidate labels based on user exclusions
             excluded_main_set = {s.strip().upper() for s in (config.excluded_main_skus or []) if s.strip()}
             excluded_sku_set = {s.strip().upper() for s in (config.excluded_skus or []) if s.strip()}
             excluded_courier_set = {s.strip().upper() for s in (config.excluded_couriers or []) if s.strip()}
+            excluded_order_set = {str(s).strip().upper() for s in (config.excluded_order_ids or []) if str(s).strip()}
+            excluded_mp_set = {s.strip().upper() for s in (config.excluded_marketplaces or []) if s.strip()}
 
             active_labels: List[Dict] = []
             for lbl in candidate_labels:
+                # Check Marketplace exclusion
+                lbl_mp = (lbl.get("marketplace") or "Meesho").strip().upper()
+                if lbl_mp in excluded_mp_set:
+                    continue
+
+                # Check Order ID or Waybill exclusion
+                lbl_ord = (lbl.get("order_id") or "").strip().upper()
+                lbl_wbl = (lbl.get("wbl_id") or "").strip().upper()
+                if (lbl_ord and lbl_ord in excluded_order_set) or (lbl_wbl and lbl_wbl in excluded_order_set):
+                    continue
+
                 courier_name = (lbl.get("courier_partner") or "Unassigned").strip().upper()
                 if courier_name in excluded_courier_set:
                     continue
@@ -398,7 +563,18 @@ class PDFBatchProcessor:
                 sku_items = lbl.get("sku_items") or []
                 if sku_items:
                     primary_sku = getattr(sku_items[0], "sku", str(sku_items[0])).strip()
-                    main_sku = get_main_sku_group(primary_sku).strip().upper()
+                    parent_desc = getattr(sku_items[0], "description", None)
+                    if parent_desc and str(parent_desc).strip() and str(parent_desc).strip().upper() not in ("UNMATCHED", "UNKNOWN", "UNKNOWN SKUS", "OTHER"):
+                        main_sku = str(parent_desc).strip().upper()
+                    else:
+                        main_sku = get_main_sku_group(
+                            primary_sku,
+                            sku_engine=sku_engine,
+                            user_skus=user_skus,
+                            full_text=lbl.get("raw_text", ""),
+                            smart_sku_detection=getattr(config, "smart_sku_detection", False),
+                        ).strip().upper()
+                    lbl["main_sku"] = main_sku
                     if main_sku in excluded_main_set:
                         continue
 
@@ -406,6 +582,7 @@ class PDFBatchProcessor:
                     if any(getattr(si, "sku", str(si)).strip().upper() in excluded_sku_set for si in sku_items):
                         continue
                 else:
+                    lbl["main_sku"] = "UNMATCHED"
                     if "UNMATCHED" in excluded_main_set or "UNMATCHED" in excluded_sku_set:
                         continue
 
@@ -416,6 +593,27 @@ class PDFBatchProcessor:
                     f"User filter applied: {len(candidate_labels) - len(active_labels)} label(s) excluded from output PDF."
                 )
 
+            # Calculate duplicate label metrics
+            total_labels_detected = len(candidate_labels)
+            total_detected_duplicates = len(detected_duplicates)
+
+            excluded_duplicates_count = 0
+            unexcluded_duplicates: List[DuplicateLabelItem] = []
+            for d in detected_duplicates:
+                d_ord = (d.order_id or "").strip().upper()
+                d_wbl = (d.wbl_id or "").strip().upper()
+                if (d_ord and d_ord in excluded_order_set) or (d_wbl and d_wbl in excluded_order_set):
+                    excluded_duplicates_count += 1
+                else:
+                    unexcluded_duplicates.append(d)
+
+            has_duplicates = len(unexcluded_duplicates) > 0
+            all_labels_duplicate = (
+                total_labels_detected > 0
+                and total_detected_duplicates == total_labels_detected
+                and excluded_duplicates_count == 0
+            )
+
             # 4b. Deterministic Sorting on active labels
             if config.sort_by == SortCriterion.COURIER:
                 sorted_labels = courier_sorter_service.sort_by_courier(active_labels)
@@ -423,6 +621,20 @@ class PDFBatchProcessor:
                 sorted_labels = courier_sorter_service.sort_by_sku(active_labels)
             elif config.sort_by == SortCriterion.SKU_COURIER:
                 sorted_labels = courier_sorter_service.sort_by_sku_and_courier(active_labels)
+            elif config.sort_by == SortCriterion.MARKETPLACE:
+                sorted_labels = courier_sorter_service.sort_by_marketplace(active_labels)
+            elif config.sort_by == SortCriterion.MARKETPLACE_SKU_COURIER:
+                sorted_labels = courier_sorter_service.sort_by_marketplace_sku_courier(active_labels)
+            elif config.sort_by == SortCriterion.MARKETPLACE_COURIER:
+                sorted_labels = courier_sorter_service.sort_by_marketplace_courier(active_labels)
+            elif config.sort_by == SortCriterion.SKU_MARKETPLACE_COURIER:
+                sorted_labels = courier_sorter_service.sort_by_sku_marketplace_courier(active_labels)
+            elif config.sort_by == SortCriterion.COURIER_SKU_MARKETPLACE:
+                sorted_labels = courier_sorter_service.sort_by_courier_sku_marketplace(active_labels)
+            elif config.sort_by == SortCriterion.COURIER_MARKETPLACE_SKU:
+                sorted_labels = courier_sorter_service.sort_by_courier_marketplace_sku(active_labels)
+            elif config.sort_by == SortCriterion.SKU_COURIER_MARKETPLACE:
+                sorted_labels = courier_sorter_service.sort_by_sku_courier_marketplace(active_labels)
             else:
                 sorted_labels = sorted(active_labels, key=lambda x: x.get("original_index", 0))
 
@@ -489,17 +701,38 @@ class PDFBatchProcessor:
                     )
                 )
 
+            # 7a. Marketplace Breakdown Aggregation
+            mp_counts: Dict[str, int] = {}
+            for label in sorted_labels:
+                m_name = (label.get("marketplace") or "Meesho").capitalize()
+                mp_counts[m_name] = mp_counts.get(m_name, 0) + 1
+
+            marketplace_breakdown: List[MarketplaceSummary] = []
+            for m_name, count in sorted(mp_counts.items(), key=lambda x: -x[1]):
+                pct = round((count / total_labels_generated * 100), 1) if total_labels_generated > 0 else 0.0
+                marketplace_breakdown.append(
+                    MarketplaceSummary(
+                        marketplace=m_name,
+                        label_count=count,
+                        percentage=pct,
+                    )
+                )
+
             # 7b. Group SKUs into Main SKUs (e.g. BROWN, GREEN) and All Sub-SKUs
             raw_label_summary_items = [
                 {
                     "courier": lbl.get("courier_partner") or "Unassigned",
                     "order_id": lbl.get("order_id"),
                     "sku_items": lbl.get("sku_items") or [],
+                    "raw_text": lbl.get("raw_text", ""),
                 }
                 for lbl in candidate_labels
             ]
             main_skus, all_skus = picklist_generator_service.group_skus_for_inspection(
-                raw_label_summary_items
+                raw_label_summary_items,
+                sku_engine=sku_engine,
+                user_skus=user_skus,
+                smart_sku_detection=getattr(config, "smart_sku_detection", False),
             )
 
             # 8. Marketplace detection & Platform-Specific Sequence Naming ({platform}{seq}prayxis.pdf)
@@ -518,7 +751,7 @@ class PDFBatchProcessor:
                     q: Dict[str, Any] = {"marketplace": clean_mp}
                     if user_id:
                         q["user_id"] = user_id
-                    count = await db.processing_jobs.count_documents(q)
+                    count = await asyncio.wait_for(db.processing_jobs.count_documents(q), timeout=0.8)
                     seq_num = count + 1
                 except Exception:
                     seq_num = 1
@@ -550,6 +783,7 @@ class PDFBatchProcessor:
                 total_invoices_removed=total_invoices_removed,
                 total_pages_flagged=total_pages_flagged,
                 courier_breakdown=courier_breakdown,
+                marketplace_breakdown=marketplace_breakdown,
                 main_skus=main_skus,
                 all_skus=all_skus,
                 picklist_items=picklist_items,
@@ -557,7 +791,12 @@ class PDFBatchProcessor:
                 warnings=warnings,
                 has_ambiguity=len(ambiguous_labels) > 0,
                 ambiguous_labels=ambiguous_labels,
+                has_duplicates=has_duplicates,
+                all_labels_duplicate=all_labels_duplicate,
+                duplicate_labels=unexcluded_duplicates,
+                excluded_duplicates_count=excluded_duplicates_count,
                 formatted_filename=formatted_pdf_name,
+                marketplace=clean_mp,
                 downloads=downloads,
             )
 
@@ -584,102 +823,34 @@ class PDFBatchProcessor:
                     ],
                     "original_index": c["original_index"],
                     "raw_text": c.get("raw_text", ""),
+                    "marketplace": c.get("marketplace", "Meesho"),
                 })
             with open(job_dir / "candidate_labels.json", "w", encoding="utf-8") as f:
                 json.dump(candidate_labels_serializable, f)
 
-            # 12. Persist processing job in MongoDB for authenticated user history
+            # 12. Persist processing job & Master Sheet in Background Task (Never blocks HTTP response)
             if user_id:
-                try:
-                    db = get_db()
-                    if db is not None:
-                        await db.processing_jobs.insert_one({
-                            "job_id": job_id,
-                            "user_id": user_id,
-                            "marketplace": clean_mp,
-                            "formatted_filename": formatted_pdf_name,
-                            "status": job_response.status,
-                            "created_at": created_at,
-                            "total_files": len(files),
-                            "total_labels_generated": total_labels_generated,
-                            "total_invoices_removed": total_invoices_removed,
-                            "courier_breakdown": [c.model_dump() for c in courier_breakdown],
-                            "main_skus": [m.model_dump() for m in main_skus],
-                            "downloads": downloads.model_dump(),
-                            "has_ambiguity": len(ambiguous_labels) > 0,
-                        })
-
-                        # 12b. Automatically save detected Main SKUs and sub-SKUs into Personal SKU Database
-                        now_utc = datetime.now(timezone.utc)
-                        for m in main_skus:
-                            m_code = m.main_sku.strip()
-                            if m_code and m_code.upper() != "UNMATCHED":
-                                sub_kws = [s.sku.strip() for s in m.sub_skus if s.sku and s.sku.upper() != "UNMATCHED"]
-                                all_kws = list(dict.fromkeys([m_code] + sub_kws))
-
-                                existing = await db.user_skus.find_one({
-                                    "user_id": user_id,
-                                    "sku_code": {"$regex": f"^{re.escape(m_code)}$", "$options": "i"},
-                                })
-                                if existing:
-                                    await db.user_skus.update_one(
-                                        {"_id": existing["_id"]},
-                                        {
-                                            "$addToSet": {"keywords": {"$each": all_kws}},
-                                            "$set": {"updated_at": now_utc},
-                                        }
-                                    )
-                                else:
-                                    await db.user_skus.insert_one({
-                                        "user_id": user_id,
-                                        "sku_code": m_code,
-                                        "product_name": m_code,
-                                        "keywords": all_kws,
-                                        "aliases": [],
-                                        "priority": 0,
-                                        "is_active": True,
-                                        "created_at": now_utc,
-                                        "updated_at": now_utc,
-                                    })
-                except Exception as e:
-                    logger.warning("Failed to persist job record to MongoDB: %s", str(e))
-
-                # 13. Update seller Master Sheet (Deduplicated strictly by Order ID)
-                try:
-                    await master_sheet_service.record_batch_labels(
+                asyncio.create_task(
+                    self._persist_job_and_master_sheet_background(
                         user_id=user_id,
                         job_id=job_id,
-                        labels=sorted_labels,
-                        marketplace=clean_mp,
-                        custom_pdf_name=formatted_pdf_name,
+                        clean_mp=clean_mp,
+                        formatted_pdf_name=formatted_pdf_name,
+                        job_status=job_response.status,
+                        created_at=created_at,
+                        total_files=len(files),
+                        total_labels_generated=total_labels_generated,
+                        total_invoices_removed=total_invoices_removed,
+                        courier_breakdown=courier_breakdown,
+                        main_skus=main_skus,
+                        downloads=downloads,
+                        ambiguous_labels=ambiguous_labels,
+                        sorted_labels=sorted_labels,
                     )
-                except Exception as m_err:
-                    logger.warning("Failed to update Master Sheet for job %s: %s", job_id, str(m_err))
-
-                # 14. Auto-backup to user's Google Drive in marketplace folder if connected
-                try:
-                    db = get_db()
-                    if db is not None:
-                        user_doc = await db.users.find_one({"_id": ObjectId(user_id)})
-                        if user_doc and user_doc.get("google_drive", {}).get("connected"):
-                            auto_save = user_doc.get("settings", {}).get("auto_save_to_drive", True)
-                            if auto_save:
-                                from app.services.google.drive import google_drive_service
-                                drive_res = await google_drive_service.backup_job_to_drive(
-                                    user_id, job_id, marketplace=clean_mp, custom_pdf_name=formatted_pdf_name
-                                )
-                                if drive_res.get("success"):
-                                    f_url = drive_res.get("folder_url")
-                                    p_url = drive_res.get("pdf_drive_url")
-                                    csv_url = drive_res.get("picklist_drive_url")
-                                    job_response.downloads.google_drive_folder = f_url
-                                    job_response.downloads.google_drive_pdf = p_url
-                                    job_response.downloads.google_drive_picklist = csv_url
-                except Exception as g_err:
-                    logger.warning("Auto Google Drive backup skipped or failed: %s", str(g_err))
+                )
 
             logger.info(
-                "Job %s completed: %d labels, %d invoices removed, %d flagged",
+                "Job %s completed in fast pipeline: %d labels, %d invoices removed, %d flagged",
                 job_id,
                 total_labels_generated,
                 total_invoices_removed,
@@ -695,6 +866,80 @@ class PDFBatchProcessor:
                     doc.close()
                 except Exception:
                     pass
+
+    async def _persist_job_and_master_sheet_background(
+        self,
+        user_id: str,
+        job_id: str,
+        clean_mp: str,
+        formatted_pdf_name: str,
+        job_status: str,
+        created_at: datetime,
+        total_files: int,
+        total_labels_generated: int,
+        total_invoices_removed: int,
+        courier_breakdown: List[Any],
+        main_skus: List[Any],
+        downloads: Any,
+        ambiguous_labels: List[Any],
+        sorted_labels: List[Dict[str, Any]],
+    ) -> None:
+        """Background asynchronous persistence for MongoDB job history and Master Sheet recording."""
+        try:
+            db = get_db()
+            if db is not None:
+                await db.processing_jobs.insert_one({
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "marketplace": clean_mp,
+                    "formatted_filename": formatted_pdf_name,
+                    "status": job_status,
+                    "created_at": created_at,
+                    "total_files": total_files,
+                    "total_labels_generated": total_labels_generated,
+                    "total_invoices_removed": total_invoices_removed,
+                    "courier_breakdown": [c.model_dump() if hasattr(c, "model_dump") else c for c in courier_breakdown],
+                    "main_skus": [m.model_dump() if hasattr(m, "model_dump") else m for m in main_skus],
+                    "downloads": downloads.model_dump() if hasattr(downloads, "model_dump") else downloads,
+                    "has_ambiguity": len(ambiguous_labels) > 0,
+                })
+
+                now_utc = datetime.now(timezone.utc)
+                for m in main_skus:
+                    m_code = (getattr(m, "main_sku", None) or (m.get("main_sku") if isinstance(m, dict) else "")).strip()
+                    if m_code and m_code.upper() != "UNMATCHED":
+                        sub_skus_list = getattr(m, "sub_skus", []) or (m.get("sub_skus", []) if isinstance(m, dict) else [])
+                        sub_kws = [
+                            (getattr(s, "sku", None) or (s.get("sku") if isinstance(s, dict) else str(s))).strip()
+                            for s in sub_skus_list
+                            if (getattr(s, "sku", None) or (s.get("sku") if isinstance(s, dict) else str(s))).strip().upper() != "UNMATCHED"
+                        ]
+                        all_kws = list(dict.fromkeys(sub_kws))
+                        if all_kws:
+                            await db.user_skus.update_one(
+                                {
+                                    "user_id": user_id,
+                                    "sku_code": {"$regex": f"^{re.escape(m_code)}$", "$options": "i"},
+                                },
+                                {
+                                    "$addToSet": {"keywords": {"$each": all_kws}},
+                                    "$set": {"updated_at": now_utc},
+                                },
+                            )
+        except Exception as e:
+            logger.warning("Failed to persist job record to MongoDB in background: %s", str(e))
+
+        try:
+            await master_sheet_service.record_batch_labels(
+                user_id=user_id,
+                job_id=job_id,
+                labels=sorted_labels,
+                marketplace=clean_mp,
+                custom_pdf_name=formatted_pdf_name,
+                job_created_at=created_at,
+            )
+        except Exception as m_err:
+            logger.warning("Failed to update Master Sheet for job %s: %s", job_id, str(m_err))
 
 
 batch_processor = PDFBatchProcessor()

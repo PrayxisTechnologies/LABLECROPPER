@@ -1,6 +1,8 @@
 """PDF Batch Processing and Output Artifact Download Endpoints."""
 
+import asyncio
 import json
+import re
 from pathlib import Path
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
@@ -17,6 +19,7 @@ from app.schemas.processing import (
     ExtractedSKU,
     LabelOutputFormat,
     MainSkuSummary,
+    MarketplaceSummary,
     ProcessingConfig,
     ProcessingJobResponse,
     SortCriterion,
@@ -61,7 +64,7 @@ async def inspect_uploaded_labels(
             detail="No PDF files provided.",
         )
 
-    if len(files) > settings.MAX_UPLOAD_FILES:
+    if settings.MAX_UPLOAD_FILES > 0 and len(files) > settings.MAX_UPLOAD_FILES:
         raise MaxFilesExceededException(
             max_files=settings.MAX_UPLOAD_FILES,
             received_count=len(files),
@@ -69,12 +72,23 @@ async def inspect_uploaded_labels(
 
     # Load authenticated user's SKU intelligence if available
     sku_engine: Optional[SKUIntelligenceEngine] = None
+    u_skus: Optional[List[dict]] = None
     if current_user:
         db = get_db()
         if db is not None:
             user_id = str(current_user["_id"])
-            u_skus = await db.user_skus.find({"user_id": user_id, "is_active": True}).to_list(length=2000)
-            u_decisions = await db.sku_decisions.find({"user_id": user_id}).to_list(length=1000)
+            from app.api.v1.endpoints.skus import _get_user_clauses
+            user_clauses = _get_user_clauses(user_id, current_user.get("email"))
+            try:
+                u_skus, u_decisions = await asyncio.gather(
+                    db.user_skus.find({
+                        "$or": user_clauses,
+                        "is_active": {"$ne": False},
+                    }).to_list(length=1000),
+                    db.sku_decisions.find({"$or": user_clauses}).to_list(length=500),
+                )
+            except Exception:
+                u_skus, u_decisions = [], []
             if u_skus:
                 sku_engine = SKUIntelligenceEngine(user_skus=u_skus, user_decisions=u_decisions)
 
@@ -82,6 +96,7 @@ async def inspect_uploaded_labels(
     total_labels = 0
     raw_label_items: List[dict] = []
     courier_counts: dict[str, int] = {}
+    marketplace_counts: dict[str, int] = {}
 
     for file in files:
         filename = file.filename or "unknown.pdf"
@@ -131,14 +146,32 @@ async def inspect_uploaded_labels(
             )
             courier_counts[courier] = courier_counts.get(courier, 0) + 1
 
+            # Per-page marketplace platform detection
+            if pdf_inspector.is_snapdeal_label(header_sample, page_text):
+                mp_name = "Snapdeal"
+            elif pdf_inspector.is_flipkart_label(header_sample, page_text):
+                mp_name = "Flipkart"
+            elif "amazon" in page_text.lower():
+                mp_name = "Amazon"
+            elif "myntra" in page_text.lower():
+                mp_name = "Myntra"
+            else:
+                mp_name = "Meesho"
+            marketplace_counts[mp_name] = marketplace_counts.get(mp_name, 0) + 1
+
             # High-speed SKU extraction
             sku_items, order_id = picklist_generator_service.extract_skus(page_text)
             if sku_engine:
-                matched_sku, match_type, conf, _, _ = sku_engine.match_label_text(page_text)
+                raw_cand = sku_items[0].sku if sku_items else None
+                matched_sku, match_type, conf, _, _ = sku_engine.match_label_text(
+                    page_text,
+                    candidate_sku=raw_cand if raw_cand != "UNMATCHED" else None,
+                )
                 if matched_sku:
                     intel_sku = ExtractedSKU(
-                        sku=matched_sku,
+                        sku=raw_cand if raw_cand and raw_cand != "UNMATCHED" else matched_sku,
                         quantity=sku_items[0].quantity if sku_items else 1,
+                        description=matched_sku,
                         order_id=order_id,
                         match_type=match_type,
                         confidence=conf,
@@ -149,6 +182,8 @@ async def inspect_uploaded_labels(
                 "courier": courier,
                 "order_id": order_id,
                 "sku_items": sku_items,
+                "raw_text": page_text,
+                "marketplace": mp_name,
             })
 
         doc.close()
@@ -165,14 +200,31 @@ async def inspect_uploaded_labels(
             )
         )
 
-    # Compile Main SKUs (e.g. GREEN, BROWN) and All Sub-SKUs
-    main_skus, all_skus = picklist_generator_service.group_skus_for_inspection(raw_label_items)
+    # Compile Marketplace Breakdown
+    marketplace_breakdown: List[MarketplaceSummary] = []
+    for m_name, count in sorted(marketplace_counts.items(), key=lambda x: -x[1]):
+        pct = round((count / total_labels * 100), 1) if total_labels > 0 else 0.0
+        marketplace_breakdown.append(
+            MarketplaceSummary(
+                marketplace=m_name,
+                label_count=count,
+                percentage=pct,
+            )
+        )
+
+    # Compile Main SKUs (e.g. GREEN, BROWN) and All Sub-SKUs, prioritizing user's saved SKUs
+    main_skus, all_skus = picklist_generator_service.group_skus_for_inspection(
+        raw_label_items,
+        sku_engine=sku_engine,
+        user_skus=u_skus,
+    )
 
     return UploadInspectionResponse(
         total_files=len(files),
         total_pages=total_pages,
         total_labels=total_labels,
         courier_breakdown=courier_breakdown,
+        marketplace_breakdown=marketplace_breakdown,
         main_skus=main_skus,
         all_skus=all_skus,
     )
@@ -231,6 +283,22 @@ async def process_labels(
         default=None,
         description="JSON or comma-separated list of delivery partners to exclude from output PDF",
     ),
+    excluded_order_ids: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of Order IDs / AWB numbers to exclude from output PDF",
+    ),
+    excluded_marketplaces: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of marketplace platforms to exclude from output PDF",
+    ),
+    smart_sku_detection: bool = Form(
+        default=False,
+        description="Enable Smart SKU detection and grouping for unrecognized variants",
+    ),
+    recent_job_ids: Optional[str] = Form(
+        default=None,
+        description="JSON or comma-separated list of recent job IDs from client history for duplicate detection",
+    ),
     marketplace: Optional[str] = Form(
         default=None,
         description="Marketplace platform name (Meesho, Flipkart, Amazon, Myntra, Snapdeal)",
@@ -246,7 +314,7 @@ async def process_labels(
             detail="No PDF files provided in the processing request.",
         )
 
-    if len(files) > settings.MAX_UPLOAD_FILES:
+    if settings.MAX_UPLOAD_FILES > 0 and len(files) > settings.MAX_UPLOAD_FILES:
         raise MaxFilesExceededException(
             max_files=settings.MAX_UPLOAD_FILES,
             received_count=len(files),
@@ -260,6 +328,9 @@ async def process_labels(
         excluded_main_skus=_parse_exclusion_list(excluded_main_skus),
         excluded_skus=_parse_exclusion_list(excluded_skus),
         excluded_couriers=_parse_exclusion_list(excluded_couriers),
+        excluded_order_ids=_parse_exclusion_list(excluded_order_ids),
+        excluded_marketplaces=_parse_exclusion_list(excluded_marketplaces),
+        smart_sku_detection=smart_sku_detection,
     )
 
     # Fetch user's personal SKU database and saved decisions if authenticated
@@ -270,8 +341,18 @@ async def process_labels(
         user_id = str(current_user["_id"])
         db = get_db()
         if db is not None:
-            user_skus = await db.user_skus.find({"user_id": user_id, "is_active": True}).to_list(length=2000)
-            user_decisions = await db.sku_decisions.find({"user_id": user_id}).to_list(length=1000)
+            from app.api.v1.endpoints.skus import _get_user_clauses
+            user_clauses = _get_user_clauses(user_id, current_user.get("email"))
+            try:
+                user_skus, user_decisions = await asyncio.gather(
+                    db.user_skus.find({
+                        "$or": user_clauses,
+                        "is_active": {"$ne": False},
+                    }).to_list(length=1000),
+                    db.sku_decisions.find({"$or": user_clauses}).to_list(length=500),
+                )
+            except Exception:
+                user_skus, user_decisions = [], []
 
     try:
         result = await batch_processor.process_batch(
@@ -281,6 +362,7 @@ async def process_labels(
             user_decisions=user_decisions,
             user_id=user_id,
             marketplace=marketplace,
+            recent_job_ids=_parse_exclusion_list(recent_job_ids),
         )
         return result
     except Exception as exc:
@@ -289,6 +371,32 @@ async def process_labels(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Label processing failed: {str(exc)}",
         )
+
+
+def _safe_job_path(job_id: str, filename: Optional[str] = None) -> Path:
+    """Validate job ID against regex to prevent path traversal attacks and ensure the path stays in storage."""
+    if not job_id or not re.match(r"^[a-zA-Z0-9_\-]+$", job_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job identifier format.",
+        )
+    settings = get_settings()
+    base_dir = (Path(settings.STORAGE_DIR) / "jobs").resolve()
+    target_dir = (base_dir / job_id).resolve()
+    if not str(target_dir).startswith(str(base_dir)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden.",
+        )
+    if filename:
+        file_path = (target_dir / filename).resolve()
+        if not str(file_path).startswith(str(target_dir)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden.",
+            )
+        return file_path
+    return target_dir
 
 
 @router.get(
@@ -301,8 +409,7 @@ async def download_job_artifact(
     artifact_type: str,
 ):
     """Retrieve generated output files for a completed processing job."""
-    settings = get_settings()
-    job_dir = Path(settings.STORAGE_DIR) / "jobs" / job_id
+    job_dir = _safe_job_path(job_id)
 
     if not job_dir.exists() or not job_dir.is_dir():
         raise HTTPException(
@@ -311,7 +418,7 @@ async def download_job_artifact(
         )
 
     if artifact_type == "pdf":
-        file_path = job_dir / "labels_thermal_4x6.pdf"
+        file_path = _safe_job_path(job_id, "labels_thermal_4x6.pdf")
         if not file_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -326,7 +433,7 @@ async def download_job_artifact(
         )
 
     elif artifact_type == "picklist":
-        file_path = job_dir / "sku_picklist.csv"
+        file_path = _safe_job_path(job_id, "sku_picklist.csv")
         if not file_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -339,7 +446,7 @@ async def download_job_artifact(
         )
 
     elif artifact_type == "report":
-        file_path = job_dir / "processing_report.json"
+        file_path = _safe_job_path(job_id, "processing_report.json")
         if not file_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -368,8 +475,7 @@ async def get_page_preview(
     page_number: int,
 ):
     """Render a single 4x6 thermal page as a PNG image for live browser preview."""
-    settings = get_settings()
-    pdf_path = Path(settings.STORAGE_DIR) / "jobs" / job_id / "labels_thermal_4x6.pdf"
+    pdf_path = _safe_job_path(job_id, "labels_thermal_4x6.pdf")
 
     if not pdf_path.exists():
         raise HTTPException(
@@ -408,8 +514,7 @@ async def get_page_preview(
 )
 async def view_job_pdf(job_id: str):
     """Serve thermal PDF for in-browser iframe/object viewing without forcing attachment download."""
-    settings = get_settings()
-    file_path = Path(settings.STORAGE_DIR) / "jobs" / job_id / "labels_thermal_4x6.pdf"
+    file_path = _safe_job_path(job_id, "labels_thermal_4x6.pdf")
 
     if not file_path.exists():
         raise HTTPException(
@@ -434,8 +539,7 @@ async def view_job_pdf(job_id: str):
 )
 async def get_job_status(job_id: str) -> ProcessingJobResponse:
     """Fetch stored job report."""
-    settings = get_settings()
-    report_path = Path(settings.STORAGE_DIR) / "jobs" / job_id / "processing_report.json"
+    report_path = _safe_job_path(job_id, "processing_report.json")
 
     if not report_path.exists():
         raise HTTPException(

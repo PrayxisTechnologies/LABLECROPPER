@@ -44,7 +44,7 @@ class SKUIntelligenceEngine:
         self._build_indexes()
 
     def _build_indexes(self) -> None:
-        """Pre-index canonical codes, keywords, and decisions for fast O(1)/O(N) matching."""
+        """Pre-index canonical codes, keywords, and decisions with strict length-first hierarchy."""
         # 1. Canonical codes map: UPPERCASE code -> sku_code
         self.canonical_map: Dict[str, str] = {}
         for s in self.user_skus:
@@ -60,131 +60,171 @@ class SKUIntelligenceEngine:
             if norm and chosen:
                 self.decisions_map[norm] = chosen
 
-        # 3. Keyword / Alias index: normalized phrase -> list of matching SKU codes
-        self.keyword_index: Dict[str, List[str]] = {}
+        # 3. Build unified indexed phrases list: (norm_phrase, sku_code, is_canonical, priority)
+        # All saved phrases (SKU codes, keywords, aliases) are indexed and sorted so that longer,
+        # more specific phrases (e.g. 'rospack 80ml') are evaluated strictly before shorter phrases ('rospack').
+        self.all_phrases: List[Tuple[str, str, bool, int]] = []
+        seen_phrase_sku: Set[Tuple[str, str]] = set()
+
         for s in self.user_skus:
             code = s.get("sku_code", "").strip()
             if not code:
                 continue
+            prio = int(s.get("priority", 0))
 
-            phrases: Set[str] = set()
+            # Canonical SKU code
+            norm_code = normalize_text(code)
+            if norm_code and (norm_code, code) not in seen_phrase_sku:
+                self.all_phrases.append((norm_code, code, True, prio))
+                seen_phrase_sku.add((norm_code, code))
+
+            # Keywords
             for kw in s.get("keywords", []):
                 norm_kw = normalize_text(kw)
-                if norm_kw:
-                    phrases.add(norm_kw)
+                if norm_kw and (norm_kw, code) not in seen_phrase_sku:
+                    self.all_phrases.append((norm_kw, code, False, prio))
+                    seen_phrase_sku.add((norm_kw, code))
+
+            # Aliases
             for alias in s.get("aliases", []):
                 norm_al = normalize_text(alias)
-                if norm_al:
-                    phrases.add(norm_al)
-            # Also include normalized product title
-            norm_name = normalize_text(s.get("product_name", ""))
-            if norm_name and len(norm_name) >= 3:
-                phrases.add(norm_name)
+                if norm_al and (norm_al, code) not in seen_phrase_sku:
+                    self.all_phrases.append((norm_al, code, False, prio))
+                    seen_phrase_sku.add((norm_al, code))
 
-            for p in phrases:
-                if p not in self.keyword_index:
-                    self.keyword_index[p] = []
-                if code not in self.keyword_index[p]:
-                    self.keyword_index[p].append(code)
+            # Product name
+            norm_name = normalize_text(s.get("product_name", ""))
+            if norm_name and len(norm_name) >= 3 and (norm_name, code) not in seen_phrase_sku:
+                self.all_phrases.append((norm_name, code, False, prio))
+                seen_phrase_sku.add((norm_name, code))
+
+        # Sort all phrases: Longer token counts first, then longer character lengths, then canonical, then priority
+        self.all_phrases.sort(
+            key=lambda x: (len(x[0].split()), len(x[0]), 1 if x[2] else 0, x[3]),
+            reverse=True,
+        )
+
+        # Keyword index mapping: phrase -> list of SKU codes
+        self.keyword_index: Dict[str, List[str]] = {}
+        for p, code, _, _ in self.all_phrases:
+            if p not in self.keyword_index:
+                self.keyword_index[p] = []
+            if code not in self.keyword_index[p]:
+                self.keyword_index[p].append(code)
 
     def match_label_text(
         self,
         raw_text: str,
+        candidate_sku: Optional[str] = None,
     ) -> Tuple[Optional[str], str, float, bool, List[str]]:
-        """Match label text against personal database using explainable hierarchy.
+        """Match label text and optional candidate SKU against user's saved database.
 
-        Returns:
-            (matched_sku, match_type, confidence_score, is_ambiguous, candidate_skus)
-
-        Hierarchy:
-        1. Exact Canonical Match (confidence = 1.0)
-        2. Saved User Decision Match (confidence = 0.98)
-        3. Exact Keyword / Alias Match (confidence = 0.90)
-        4. Multi-token / Phrase Match (confidence = 0.80)
-        5. Ambiguity Check (if 2+ SKUs match with close confidence)
+        Priority Hierarchy:
+        1. Exact/Longest Phrase Match in Candidate SKU (e.g. 'rospack 80ml' > 'rospack', Confidence = 1.0)
+        2. Exact/Longest Phrase Match in Full Label Text (Longest phrase first, Confidence = 0.98)
+        3. Multi-token Word Match from user's saved SKUs (Confidence = 0.85)
+        4. Specific Saved User Decisions (Confidence = 0.80)
         """
+        # -------------------------------------------------------------
+        # Level 0: Direct Targeted Candidate SKU Match
+        # -------------------------------------------------------------
+        if candidate_sku and candidate_sku.strip() and candidate_sku.strip().upper() != "UNMATCHED":
+            cand_clean = candidate_sku.strip()
+            norm_cand = normalize_text(cand_clean)
+            cand_subtokens = set(t.lower() for t in re.findall(r"[A-Za-z]+|\d+", cand_clean))
+            compact_cand = re.sub(r"[\s_\-\.\/]+", "", norm_cand)
+
+            # Check all saved phrases strictly sorted longest-first
+            for phrase, code, is_canonical, _ in self.all_phrases:
+                p_pattern = r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])"
+                compact_phrase = phrase.replace(" ", "")
+
+                # 1. Exact phrase or standard word-boundary match
+                if phrase == norm_cand or re.search(p_pattern, norm_cand):
+                    m_type = "candidate_canonical" if is_canonical else "candidate_keyword"
+                    return code, m_type, 1.0, False, [code]
+
+                # 2. Sub-token boundary match (e.g. 'rspk10brown002' -> tokens ['rspk', '10', 'brown', '002'])
+                if phrase in cand_subtokens or compact_phrase in cand_subtokens:
+                    m_type = "candidate_token" if is_canonical else "candidate_keyword"
+                    return code, m_type, 0.98, False, [code]
+
+                # 3. Compact substring match for distinct keywords (e.g. 'brown' inside 'rspk10brown002' or 'po10green128')
+                if len(compact_phrase) >= 4 and compact_phrase in compact_cand:
+                    m_type = "candidate_submatch" if is_canonical else "candidate_keyword"
+                    return code, m_type, 0.95, False, [code]
+
+            # Multi-token candidate match (longer token sets first)
+            cand_words = set(norm_cand.split())
+            for phrase, code, _, _ in self.all_phrases:
+                tokens = phrase.split()
+                if len(tokens) >= 2 and all(t in cand_words or t in cand_subtokens for t in tokens):
+                    return code, "candidate_tokens", 0.92, False, [code]
+
         if not raw_text:
             return None, "no_text", 0.0, False, []
 
         norm_label = normalize_text(raw_text)
         label_words = set(norm_label.split())
-        label_upper = raw_text.upper()
+        label_subtokens = set(t.lower() for t in re.findall(r"[A-Za-z]+|\d+", raw_text))
+        compact_label = re.sub(r"[\s_\-\.\/]+", "", norm_label)
 
         # -------------------------------------------------------------
-        # Level 1: Saved User Decision Match
+        # Level 1: Longest Saved Phrase Match in Label Text
         # -------------------------------------------------------------
-        # Exact snippet lookup or substring lookup from previous seller confirmations
+        # Evaluates longest and most specific phrases first across both canonical codes and keywords
+        # (e.g. 'rospack 80ml' is matched before 'rospack')
+        for phrase, code, is_canonical, _ in self.all_phrases:
+            p_pattern = r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])"
+            compact_phrase = phrase.replace(" ", "")
+            if re.search(p_pattern, norm_label):
+                m_type = "exact_canonical" if is_canonical else "exact_keyword"
+                return code, m_type, 0.98, False, [code]
+            if phrase in label_subtokens or compact_phrase in label_subtokens:
+                m_type = "token_canonical" if is_canonical else "token_keyword"
+                return code, m_type, 0.95, False, [code]
+            if len(compact_phrase) >= 4 and compact_phrase in compact_label:
+                m_type = "submatch_canonical" if is_canonical else "submatch_keyword"
+                return code, m_type, 0.92, False, [code]
+
+        # -------------------------------------------------------------
+        # Level 2: Multi-Token Match (All words in phrase appear in label)
+        # -------------------------------------------------------------
+        for phrase, code, _, _ in self.all_phrases:
+            tokens = phrase.split()
+            if len(tokens) >= 2:
+                if all(t in label_words or t in label_subtokens for t in tokens):
+                    return code, "multi_token_match", 0.85, False, [code]
+
+        # -------------------------------------------------------------
+        # Level 3: Saved User Decision Match (Strict boundaries only)
+        # -------------------------------------------------------------
         if norm_label in self.decisions_map:
             chosen = self.decisions_map[norm_label]
-            return chosen, "saved_decision", 0.99, False, [chosen]
+            return chosen, "saved_decision", 0.90, False, [chosen]
+
+        if candidate_sku:
+            norm_cand_only = normalize_text(candidate_sku)
+            if norm_cand_only in self.decisions_map:
+                chosen = self.decisions_map[norm_cand_only]
+                return chosen, "saved_decision_cand", 0.90, False, [chosen]
 
         for saved_snippet, chosen in self.decisions_map.items():
-            if len(saved_snippet) >= 6 and saved_snippet in norm_label:
-                return chosen, "saved_decision_partial", 0.95, False, [chosen]
+            if len(saved_snippet) >= 10:
+                s_pattern = r"(?<![a-z0-9])" + re.escape(saved_snippet) + r"(?![a-z0-9])"
+                if re.search(s_pattern, norm_label):
+                    return chosen, "saved_decision_partial", 0.80, False, [chosen]
 
-        # -------------------------------------------------------------
-        # Level 2: Exact Canonical Match
-        # -------------------------------------------------------------
-        canonical_matches: List[str] = []
-        for code_upper, original_code in self.canonical_map.items():
-            # Check whole word match in upper text
-            pattern = r"(?<![A-Za-z0-9])" + re.escape(code_upper) + r"(?![A-Za-z0-9])"
-            if re.search(pattern, label_upper):
-                canonical_matches.append(original_code)
-
-        if len(canonical_matches) == 1:
-            return canonical_matches[0], "exact_canonical", 1.0, False, canonical_matches
-        elif len(canonical_matches) > 1:
-            # Ambiguity: Multiple distinct canonical SKUs present on one label!
-            return canonical_matches[0], "exact_canonical_ambiguous", 0.85, True, canonical_matches
-
-        # -------------------------------------------------------------
-        # Level 3: Exact Keyword / Alias Match
-        # -------------------------------------------------------------
-        keyword_hits: Dict[str, int] = {}  # sku_code -> match score
-        matched_phrases: Dict[str, List[str]] = {}
-
-        for phrase, sku_list in self.keyword_index.items():
-            # Exact phrase boundary check in normalized text
-            p_pattern = r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])"
-            if re.search(p_pattern, norm_label):
-                phrase_weight = len(phrase.split()) * 10
-                for code in sku_list:
-                    keyword_hits[code] = keyword_hits.get(code, 0) + phrase_weight
-                    if code not in matched_phrases:
-                        matched_phrases[code] = []
-                    matched_phrases[code].append(phrase)
-
-        if keyword_hits:
-            # Sort candidate SKUs by hit weight descending
-            sorted_candidates = sorted(keyword_hits.items(), key=lambda x: -x[1])
-            best_code, best_score = sorted_candidates[0]
-
-            # Ambiguity check: Is there a second candidate with an identical or close score?
-            competing = [c for c, score in sorted_candidates if score >= best_score * 0.85]
-            if len(competing) > 1:
-                return best_code, "keyword_ambiguous", 0.75, True, competing
-
-            return best_code, "exact_keyword", 0.90, False, [best_code]
-
-        # -------------------------------------------------------------
-        # Level 4: Multi-Token Match (All words in phrase appear in label)
-        # -------------------------------------------------------------
-        token_hits: Dict[str, int] = {}
-        for phrase, sku_list in self.keyword_index.items():
-            tokens = phrase.split()
-            if len(tokens) >= 2:  # Only multi-word phrases
-                if all(t in label_words for t in tokens):
-                    for code in sku_list:
-                        token_hits[code] = token_hits.get(code, 0) + len(tokens) * 5
-
-        if token_hits:
-            sorted_tokens = sorted(token_hits.items(), key=lambda x: -x[1])
-            best_code, best_score = sorted_tokens[0]
-            competing = [c for c, score in sorted_tokens if score >= best_score * 0.9]
-            if len(competing) > 1:
-                return best_code, "token_match_ambiguous", 0.70, True, competing
-            return best_code, "multi_token_match", 0.80, False, [best_code]
-
-        # No match found in user's personal database
         return None, "unmatched", 0.0, False, []
+
+    def find_parent_sku(
+        self,
+        sku_or_candidate: str,
+        full_text: str = "",
+    ) -> Optional[str]:
+        """Resolve a parent Main SKU from user's personal database for a given SKU string or label text."""
+        matched, _, conf, _, _ = self.match_label_text(
+            raw_text=full_text,
+            candidate_sku=sku_or_candidate,
+        )
+        return matched

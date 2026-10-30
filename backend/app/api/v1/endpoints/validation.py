@@ -33,7 +33,7 @@ async def validate_label_batch(
             detail="No files were provided in the upload request.",
         )
 
-    if len(files) > settings.MAX_UPLOAD_FILES:
+    if settings.MAX_UPLOAD_FILES > 0 and len(files) > settings.MAX_UPLOAD_FILES:
         raise MaxFilesExceededException(
             max_files=settings.MAX_UPLOAD_FILES,
             received_count=len(files),

@@ -1,17 +1,32 @@
 """Master Sheet endpoints for viewing, searching, and exporting all cropped labels."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel, Field
 import fitz
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
+from app.db.mongodb import ObjectId, get_db
 from app.schemas.master_sheet import MasterSheetResponse
 from app.services.master_sheet.service import master_sheet_service
 
 router = APIRouter()
 settings = get_settings()
+
+
+class BulkMasterLabelsRequest(BaseModel):
+    """Request payload for bulk operating on selected master labels."""
+
+    label_ids: List[str] = Field(..., description="List of master label IDs to process")
+
+
+def _get_user_clauses(user_id: str) -> List[Dict[str, Any]]:
+    clauses: List[Dict[str, Any]] = [{"user_id": str(user_id)}]
+    if ObjectId.is_valid(user_id):
+        clauses.append({"user_id": ObjectId(user_id)})
+    return clauses
 
 
 @router.get(
@@ -76,6 +91,23 @@ async def export_master_sheet_csv(
             "Content-Disposition": 'attachment; filename="labelflow_master_sheet.csv"',
         },
     )
+
+
+@router.post(
+    "/master-sheet/sync-from-history",
+    summary="Sync Master Sheet from Processing History",
+    description="Scans user's past processing jobs and auto-populates any missing label records into the Master Sheet.",
+)
+async def sync_master_sheet(
+    current_user: dict = Depends(get_current_user),
+):
+    """Explicitly trigger backfill / sync from user's processing history."""
+    user_id = str(current_user["_id"])
+    synced_count = await master_sheet_service.sync_master_sheet_from_history(user_id=user_id, force=True)
+    return {
+        "message": f"Successfully synced {synced_count} label records from processing history.",
+        "synced_count": synced_count,
+    }
 
 
 @router.delete(
@@ -166,3 +198,140 @@ async def print_single_label_pdf(
         )
     finally:
         src_doc.close()
+
+
+@router.post(
+    "/master-sheet/bulk-delete",
+    summary="Bulk Delete Selected Master Sheet Labels",
+    description="Deletes multiple selected label records from the seller's Master Sheet.",
+)
+async def bulk_delete_master_labels(
+    payload: BulkMasterLabelsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Bulk delete selected master labels."""
+    user_id = str(current_user["_id"])
+    db = get_db()
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable.",
+        )
+
+    if not payload.label_ids:
+        return {"message": "No labels specified.", "deleted_count": 0}
+
+    user_clauses = _get_user_clauses(user_id)
+    raw_ids = [ObjectId(lid) for lid in payload.label_ids if ObjectId.is_valid(lid)]
+    str_ids = [str(lid) for lid in payload.label_ids]
+
+    query = {
+        "$and": [
+            {"$or": user_clauses},
+            {"$or": [{"_id": {"$in": raw_ids}}, {"_id": {"$in": str_ids}}]},
+        ]
+    }
+    res = await db.master_labels.delete_many(query)
+    return {
+        "message": f"Successfully deleted {res.deleted_count} selected label records.",
+        "deleted_count": res.deleted_count,
+    }
+
+
+@router.post(
+    "/master-sheet/print-selected",
+    summary="Print Merged PDF for Selected Master Labels",
+    description="Extracts the thermal 4x6 pages for all selected labels and merges them into a single printable PDF.",
+)
+async def print_selected_master_labels(
+    payload: BulkMasterLabelsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Generate a merged print-ready PDF containing only the selected labels."""
+    user_id = str(current_user["_id"])
+    db = get_db()
+    if db is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable.",
+        )
+
+    if not payload.label_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No labels selected for printing.",
+        )
+
+    user_clauses = _get_user_clauses(user_id)
+    raw_ids = [ObjectId(lid) for lid in payload.label_ids if ObjectId.is_valid(lid)]
+    str_ids = [str(lid) for lid in payload.label_ids]
+
+    query = {
+        "$and": [
+            {"$or": user_clauses},
+            {"$or": [{"_id": {"$in": raw_ids}}, {"_id": {"$in": str_ids}}]},
+        ]
+    }
+
+    cursor = db.master_labels.find(query)
+    labels = await cursor.to_list(length=1000)
+    if not labels:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No matching labels found for selection.",
+        )
+
+    merged_doc = fitz.open()
+    cache_docs = {}
+
+    try:
+        for lbl in labels:
+            appearances = lbl.get("appearances") or []
+            if not appearances:
+                continue
+
+            # Pick latest appearance
+            app = appearances[-1]
+            job_id = app.get("job_id")
+            page_num = app.get("page_number", 1)
+
+            if not job_id:
+                continue
+
+            pdf_path = Path(settings.STORAGE_DIR) / "jobs" / job_id / "labels_thermal_4x6.pdf"
+            if not pdf_path.exists():
+                continue
+
+            if job_id not in cache_docs:
+                try:
+                    cache_docs[job_id] = fitz.open(str(pdf_path))
+                except Exception:
+                    continue
+
+            src_doc = cache_docs[job_id]
+            total_pages = len(src_doc)
+            if 1 <= page_num <= total_pages:
+                merged_doc.insert_pdf(src_doc, from_page=page_num - 1, to_page=page_num - 1)
+
+        if len(merged_doc) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Selected label PDF files could not be located in storage.",
+            )
+
+        pdf_bytes = merged_doc.tobytes(garbage=0, deflate=False)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": 'inline; filename="selected_labels_print.pdf"',
+            },
+        )
+    finally:
+        merged_doc.close()
+        for doc in cache_docs.values():
+            try:
+                doc.close()
+            except Exception:
+                pass
+

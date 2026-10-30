@@ -70,12 +70,6 @@ export default function DashboardLayout({
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white leading-tight">
                   {user.name || "Seller Dashboard"}
                 </h2>
-                {user.google_drive_connected && (
-                  <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold">
-                    <span className="w-1 h-1 rounded-full bg-emerald-400" />
-                    <span>Drive Active</span>
-                  </span>
-                )}
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">{user.email}</p>
             </div>

@@ -99,6 +99,9 @@ async def init_db() -> None:
 
             # Ensure collection indexes
             await _create_indexes(_database)
+
+            # Auto-sync any credentials or data created in fallback store directly to MongoDB Atlas
+            await _sync_fallback_to_atlas(_database)
             return
 
         except Exception as e:
@@ -176,10 +179,18 @@ async def _create_indexes(db: Any) -> None:
             name="idx_decisions_user_created",
         )
 
-        # Processing Jobs Collection: user + created_at, job_id
+        # Processing Jobs Collection: user + created_at, job_id, and compound user+trashed+created
         await db.processing_jobs.create_index(
             [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)],
             name="idx_jobs_user_created",
+        )
+        await db.processing_jobs.create_index(
+            [
+                ("user_id", pymongo.ASCENDING),
+                ("is_trashed", pymongo.ASCENDING),
+                ("created_at", pymongo.DESCENDING),
+            ],
+            name="idx_jobs_user_trashed_created",
         )
         await db.processing_jobs.create_index(
             [("job_id", pymongo.ASCENDING)],
@@ -190,6 +201,52 @@ async def _create_indexes(db: Any) -> None:
         logger.info("MongoDB indexes verified/created successfully.")
     except Exception as e:
         logger.warning("Notice while creating MongoDB indexes: %s", str(e))
+
+
+async def _sync_fallback_to_atlas(db: Any) -> None:
+    """Synchronize any users, SKUs, or jobs recorded in local fallback store to MongoDB Atlas."""
+    import json
+    from pathlib import Path
+    fallback_path = Path("storage/local_fallback_db.json")
+    if not fallback_path.exists():
+        fallback_path = Path("backend/storage/local_fallback_db.json")
+    if not fallback_path.exists():
+        return
+
+    try:
+        data = json.loads(fallback_path.read_text(encoding="utf-8"))
+        # 1. Sync Users
+        users = data.get("users", [])
+        for u in users:
+            email = u.get("email")
+            if email:
+                existing = await db.users.find_one({"email": email})
+                if not existing:
+                    u_doc = dict(u)
+                    if "_id" in u_doc:
+                        if ObjectId.is_valid(u_doc["_id"]):
+                            u_doc["_id"] = ObjectId(u_doc["_id"])
+                        else:
+                            del u_doc["_id"]
+                    await db.users.insert_one(u_doc)
+                    logger.info("Synced fallback user %s into MongoDB Atlas", email)
+
+        # 2. Sync User SKUs
+        user_skus = data.get("user_skus", [])
+        for s in user_skus:
+            u_id = s.get("user_id")
+            sku_code = s.get("sku_code")
+            if u_id and sku_code:
+                existing_sku = await db.user_skus.find_one({"user_id": u_id, "sku_code": sku_code})
+                if not existing_sku:
+                    s_doc = dict(s)
+                    if "_id" in s_doc and not ObjectId.is_valid(s_doc["_id"]):
+                        del s_doc["_id"]
+                    await db.user_skus.insert_one(s_doc)
+
+    except Exception as e:
+        logger.warning("Notice while syncing fallback store to Atlas: %s", str(e))
+
 
 
 async def close_db() -> None:

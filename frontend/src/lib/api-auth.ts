@@ -20,6 +20,7 @@ import {
 } from "./types";
 
 const TOKEN_KEY = "labelflow_jwt_token";
+const USER_KEY = "labelflow_user_profile";
 
 export function getStoredToken(): string | null {
   if (typeof window !== "undefined") {
@@ -34,6 +35,28 @@ export function setStoredToken(token: string | null): void {
       localStorage.setItem(TOKEN_KEY, token);
     } else {
       localStorage.removeItem(TOKEN_KEY);
+    }
+  }
+}
+
+export function getStoredUser(): User | null {
+  if (typeof window !== "undefined") {
+    const raw = localStorage.getItem(USER_KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {}
+    }
+  }
+  return null;
+}
+
+export function setStoredUser(user: User | null): void {
+  if (typeof window !== "undefined") {
+    if (user) {
+      localStorage.setItem(USER_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(USER_KEY);
     }
   }
 }
@@ -73,6 +96,30 @@ export async function apiRegister(
 
   const data: TokenResponse = await res.json();
   setStoredToken(data.access_token);
+  setStoredUser(data.user);
+  return data;
+}
+
+export async function apiLoginWithVerifiedEmail(
+  email: string,
+  name?: string
+): Promise<TokenResponse> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/auth/verified-email-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, name }),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "Verification sign-in failed.");
+  }
+
+  const data: TokenResponse = await res.json();
+  setStoredToken(data.access_token);
+  setStoredUser(data.user);
   return data;
 }
 
@@ -95,6 +142,7 @@ export async function apiLogin(
 
   const data: TokenResponse = await res.json();
   setStoredToken(data.access_token);
+  setStoredUser(data.user);
   return data;
 }
 
@@ -119,6 +167,7 @@ export async function apiLoginWithGoogle(data: {
 
   const tokenResp: TokenResponse = await res.json();
   setStoredToken(tokenResp.access_token);
+  setStoredUser(tokenResp.user);
   return tokenResp;
 }
 
@@ -216,6 +265,7 @@ export async function apiLogout(): Promise<void> {
     // ignore
   } finally {
     setStoredToken(null);
+    setStoredUser(null);
   }
 }
 
@@ -236,13 +286,19 @@ export async function apiGetMe(): Promise<User | null> {
     if (!res.ok) {
       if (res.status === 401) {
         setStoredToken(null);
+        setStoredUser(null);
+        return null;
       }
-      return null;
+      // On 5xx, cold-start, or network issue, maintain cached user to avoid accidental logout
+      return getStoredUser();
     }
 
-    return await res.json();
+    const user: User = await res.json();
+    setStoredUser(user);
+    return user;
   } catch {
-    return null;
+    // Return cached user if available
+    return getStoredUser();
   }
 }
 
@@ -426,10 +482,11 @@ export async function apiSyncSkusFromJobs(): Promise<{
 
 export async function apiGetJobHistory(
   page: number = 1,
-  size: number = 20
+  size: number = 20,
+  trash: boolean = false
 ): Promise<JobHistoryResponse> {
   const baseUrl = getApiBaseUrl();
-  const res = await fetch(`${baseUrl}/jobs/history?page=${page}&size=${size}`, {
+  const res = await fetch(`${baseUrl}/jobs/history?page=${page}&size=${size}&trash=${trash}`, {
     method: "GET",
     headers: getAuthHeaders(),
     credentials: "include",
@@ -442,7 +499,35 @@ export async function apiGetJobHistory(
   return await res.json();
 }
 
-export async function apiDeleteJob(jobId: string): Promise<void> {
+export async function apiTrashJob(jobId: string): Promise<void> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/jobs/${jobId}/trash`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to move batch to trash.");
+  }
+}
+
+export async function apiRestoreJob(jobId: string): Promise<void> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/jobs/${jobId}/restore`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to restore batch from trash.");
+  }
+}
+
+export async function apiDeleteJobPermanently(jobId: string): Promise<void> {
   const baseUrl = getApiBaseUrl();
   const res = await fetch(`${baseUrl}/jobs/${jobId}`, {
     method: "DELETE",
@@ -452,8 +537,43 @@ export async function apiDeleteJob(jobId: string): Promise<void> {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "Failed to delete batch record.");
+    throw new Error(err.detail || "Failed to permanently delete batch record.");
   }
+}
+
+// Alias for existing callers
+export const apiDeleteJob = apiDeleteJobPermanently;
+
+export async function apiClearAllJobs(): Promise<{ message: string; cleared_count: number }> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/jobs/clear-all`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to clear all batches.");
+  }
+
+  return await res.json();
+}
+
+export async function apiEmptyTrash(): Promise<{ message: string; deleted_count: number }> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/jobs/trash/empty`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to empty trash.");
+  }
+
+  return await res.json();
 }
 
 export async function apiResolveAmbiguity(
@@ -513,6 +633,25 @@ export async function apiGetMasterSheet(params?: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Failed to fetch Master Sheet.");
+  }
+
+  return await res.json();
+}
+
+export async function apiSyncMasterSheetFromHistory(): Promise<{
+  message: string;
+  synced_count: number;
+}> {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/master-sheet/sync-from-history`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to sync Master Sheet from history.");
   }
 
   return await res.json();
@@ -580,3 +719,78 @@ export async function apiClearMasterSheet(marketplace?: string): Promise<void> {
     throw new Error(err.detail || "Failed to clear Master Sheet.");
   }
 }
+
+export async function apiClaimLocalHistory(
+  jobIds: string[]
+): Promise<{ claimed: number; total: number }> {
+  if (!jobIds || jobIds.length === 0) return { claimed: 0, total: 0 };
+  const baseUrl = getApiBaseUrl();
+  try {
+    const res = await fetch(`${baseUrl}/jobs/claim-history`, {
+      method: "POST",
+      headers: {
+        ...getAuthHeaders(),
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({ job_ids: jobIds }),
+    });
+
+    if (!res.ok) {
+      return { claimed: 0, total: jobIds.length };
+    }
+
+    return await res.json();
+  } catch {
+    return { claimed: 0, total: jobIds.length };
+  }
+}
+
+export async function apiBulkDeleteMasterLabels(
+  labelIds: string[]
+): Promise<{ deleted_count: number }> {
+  if (!labelIds || labelIds.length === 0) return { deleted_count: 0 };
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/master-sheet/bulk-delete`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({ label_ids: labelIds }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to bulk delete selected labels.");
+  }
+
+  return await res.json();
+}
+
+export async function apiPrintSelectedMasterLabels(
+  labelIds: string[]
+): Promise<Blob> {
+  if (!labelIds || labelIds.length === 0) {
+    throw new Error("No labels selected for printing.");
+  }
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/master-sheet/print-selected`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({ label_ids: labelIds }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to generate print document for selected labels.");
+  }
+
+  return await res.blob();
+}
+

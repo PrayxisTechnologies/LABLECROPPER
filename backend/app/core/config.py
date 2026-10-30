@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     # CORS configuration - default allows localhost & production frontends
     ALLOWED_CORS_ORIGINS: str = "*"
 
-    # Upload validation limits
-    MAX_UPLOAD_SIZE_MB: int = 50
-    MAX_UPLOAD_FILES: int = 10
+    # Upload validation limits (Supports 500+ files and 2GB+ per batch)
+    MAX_UPLOAD_SIZE_MB: int = 2048
+    MAX_UPLOAD_FILES: int = 500
     ALLOWED_MIME_TYPES: str = "application/pdf"
 
     # Storage paths
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # User Authentication & Security
     AUTH_SECRET_KEY: str = "labelflow-jwt-secret-key-prod-2026-super-secure-token-meesho-cropper"
     AUTH_ALGORITHM: str = "HS256"
-    AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30 days
     AUTH_COOKIE_NAME: str = "labelflow_token"
     AUTH_COOKIE_SECURE: bool = False  # Set to True in HTTPS production environments
     AUTH_COOKIE_SAMESITE: str = "lax"

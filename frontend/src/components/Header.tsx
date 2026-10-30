@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
+import { QuickLabelSearchModal } from "@/components/QuickLabelSearchModal";
 
 interface HeaderProps {
   backendOnline?: boolean | null;
@@ -17,12 +18,19 @@ export const Header: React.FC<HeaderProps> = () => {
   const { resolvedTheme, toggleTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Clean navigation links with SEO-friendly targets
   const navLinks = [
     { label: "Home", href: "/" },
     { label: "Meesho", href: "/meesho-label-cropper" },
     { label: "Flipkart", href: "/flipkart-label-cropper" },
+    { label: "Snapdeal", href: "/snapdeal-label-cropper" },
     { label: "Amazon", href: "/amazon" },
     { label: "Myntra", href: "/myntra" },
     { label: "SKU Rules", href: "/dashboard/skus" },
@@ -110,7 +118,7 @@ export const Header: React.FC<HeaderProps> = () => {
         <div className="flex items-center space-x-3 flex-shrink-0">
           
           {/* 1. Sign In (or Authenticated User Profile) */}
-          {isAuthenticated && user ? (
+          {mounted && isAuthenticated && user ? (
             <div className="relative">
               <button
                 type="button"
@@ -176,14 +184,9 @@ export const Header: React.FC<HeaderProps> = () => {
                   <Link
                     href="/dashboard/history"
                     onClick={() => setUserDropdownOpen(false)}
-                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750 flex items-center justify-between"
+                    className="block px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-navy-750"
                   >
-                    <span>Processing History</span>
-                    {user.google_drive_connected ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Google Drive Linked" />
-                    ) : (
-                      <span className="text-[10px] text-cyan-neon font-bold">Link Drive</span>
-                    )}
+                    Processing History
                   </Link>
                   <div className="border-t border-slate-100 dark:border-navy-700/60 my-1" />
                   <button
@@ -207,6 +210,20 @@ export const Header: React.FC<HeaderProps> = () => {
               Sign In
             </Link>
           )}
+
+          {/* Quick Search Button */}
+          <button
+            type="button"
+            onClick={() => setSearchModalOpen(true)}
+            title="Search labels by Order ID, WBL, or SKU"
+            aria-label="Quick search labels"
+            className="p-2 rounded-xl border transition-all duration-200 flex items-center justify-center bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700 dark:bg-navy-800/90 dark:border-navy-700 dark:text-cyan-400 dark:hover:border-cyan-neon/50 active:scale-95"
+          >
+            <svg className="w-4 h-4 text-cyan-600 dark:text-cyan-neon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </button>
 
           {/* 2. Dark / Bright Mode Toggle placed AFTER Sign In */}
           <button
@@ -297,7 +314,7 @@ export const Header: React.FC<HeaderProps> = () => {
             );
           })}
 
-          {!isAuthenticated && (
+          {(!mounted || !isAuthenticated) && (
             <div className="pt-2 border-t dark:border-navy-700/60 border-slate-200">
               <Link
                 href="/login"
@@ -310,6 +327,11 @@ export const Header: React.FC<HeaderProps> = () => {
           )}
         </div>
       )}
+      {/* Quick Label Search Modal */}
+      <QuickLabelSearchModal
+        isOpen={searchModalOpen}
+        onClose={() => setSearchModalOpen(false)}
+      />
     </header>
   );
 };

@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { UploadInspectionResponse, SortOption } from "@/lib/types";
+import { UploadInspectionResponse, SortOption, UserSKU, MarketplaceSummary } from "@/lib/types";
+import { apiCreateSku, apiGetSkus, apiUpdateSku } from "@/lib/api-auth";
 
 interface UploadSummaryCardProps {
   data: UploadInspectionResponse;
@@ -11,16 +12,26 @@ interface UploadSummaryCardProps {
   activeExcludedMainSkus?: string[];
   activeExcludedSkus?: string[];
   activeExcludedCouriers?: string[];
+  activeExcludedMarketplaces?: string[];
+  smartSkuDetection?: boolean;
   onUpdateBatch?: (params: {
     sort: SortOption;
     excluded_main_skus: string[];
     excluded_skus: string[];
     excluded_couriers: string[];
+    excluded_marketplaces?: string[];
+    smart_sku_detection?: boolean;
   }) => void;
   onConfirmSku?: (params: {
     oldSku: string;
     newSku: string;
     keyword: string;
+  } | {
+    resolutions: Array<{
+      oldSku: string;
+      newSku: string;
+      keyword: string;
+    }>;
   }) => Promise<void> | void;
   // Fallbacks for backwards compatibility
   onApplySort?: (sort: SortOption) => void;
@@ -28,6 +39,7 @@ interface UploadSummaryCardProps {
     excluded_main_skus: string[];
     excluded_skus: string[];
     excluded_couriers: string[];
+    excluded_marketplaces?: string[];
   }) => void;
 }
 
@@ -39,26 +51,92 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
   activeExcludedMainSkus = [],
   activeExcludedSkus = [],
   activeExcludedCouriers = [],
+  activeExcludedMarketplaces = [],
+  smartSkuDetection = false,
   onUpdateBatch,
   onConfirmSku,
   onApplySort,
   onApplyFilters,
 }) => {
-  // Inline SKU Editing states for Main SKUs
+  // Smart Sort (Letter-wise & Number-wise A-Z / 0-9) state
+  const [smartSort, setSmartSort] = useState<boolean>(true);
+
+  // Local state for instant SKU updates without continuous PDF re-renders
+  const [localMainSkus, setLocalMainSkus] = useState(data.main_skus || []);
+  const [pendingResolutions, setPendingResolutions] = useState<Array<{ oldSku: string; newSku: string; keyword: string }>>([]);
+
+  useEffect(() => {
+    setLocalMainSkus(data.main_skus || []);
+    setPendingResolutions([]);
+  }, [data.main_skus]);
+
+  // Inline SKU Editing states
   const [editingMainSku, setEditingMainSku] = useState<string | null>(null);
   const [editSkuName, setEditSkuName] = useState<string>("");
   const [editKeyword, setEditKeyword] = useState<string>("");
+  const [initialKws, setInitialKws] = useState<string[]>([]);
   const [isConfirmingSku, setIsConfirmingSku] = useState<boolean>(false);
+  const [isSavingSku, setIsSavingSku] = useState<boolean>(false);
   const [editSuccessSku, setEditSuccessSku] = useState<string | null>(null);
+  const [userSkusMap, setUserSkusMap] = useState<Record<string, UserSKU>>({});
+  const [isLoadingSkuKeywords, setIsLoadingSkuKeywords] = useState<boolean>(false);
+  const [isCustomUserSku, setIsCustomUserSku] = useState<boolean>(false);
+  const [splittingVariant, setSplittingVariant] = useState<string | null>(null);
+  const [splitTargetSku, setSplitTargetSku] = useState<string>("");
+  const [savingCatalogSku, setSavingCatalogSku] = useState<string | null>(null);
+  const [inlineError, setInlineError] = useState<string | null>(null);
 
-  // Active Tab: "main_sku" (Parent groups), "all_skus" (Individual variants), or "courier"
-  const [activeTab, setActiveTab] = useState<"main_sku" | "all_skus" | "courier">("main_sku");
+  // Real-Time Unknown SKU Assignment states
+  const [assigningVariant, setAssigningVariant] = useState<string | null>(null);
+  const [assignMode, setAssignMode] = useState<"existing" | "new" | null>(null);
+  const [selectedExistingSku, setSelectedExistingSku] = useState<string>("");
+  const [newSkuInput, setNewSkuInput] = useState<string>("");
 
-  // Sorting in All SKUs Tab: "name" (A-Z letter-wise) or "count" (No. of Labels)
+  // Top-Level Bulk / Common Keyword Add SKU states
+  const [isBulkAddOpen, setIsBulkAddOpen] = useState<boolean>(false);
+  const [bulkAddMode, setBulkAddMode] = useState<"existing" | "new">("existing");
+  const [bulkSelectedExistingSku, setBulkSelectedExistingSku] = useState<string>("");
+  const [bulkNewSkuName, setBulkNewSkuName] = useState<string>("");
+  const [bulkCommonKeyword, setBulkCommonKeyword] = useState<string>("");
+
+  // Pre-load user SKUs from Personal SKU Database for instant mapping lookup
+  useEffect(() => {
+    let isMounted = true;
+    async function loadCatalog() {
+      try {
+        const res = await apiGetSkus({ size: 1000 });
+        if (isMounted && res && res.items) {
+          const map: Record<string, UserSKU> = {};
+          for (const item of res.items) {
+            if (item.sku_code) {
+              map[item.sku_code.trim().toUpperCase()] = item;
+            }
+          }
+          setUserSkusMap(map);
+        }
+      } catch {
+        // Guest mode or offline fallback
+      }
+    }
+    loadCatalog();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Active Tab
+  const [activeTab, setActiveTab] = useState<"main_sku" | "all_skus" | "courier" | "platforms">("main_sku");
+
+  // Sorting in All SKUs Tab
   const [sortBy, setSortBy] = useState<"name" | "count">("name");
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+  const [skuSearchQuery, setSkuSearchQuery] = useState<string>("");
+  const [selectedMainSkuFilter, setSelectedMainSkuFilter] = useState<string | null>(null);
 
-  // Selected PDF Organization Mode in the single unified dropdown
+  // Expanded Main SKU variants accordion
+  const [expandedMainSkus, setExpandedMainSkus] = useState<Record<string, boolean>>({});
+
+  // Selected PDF Organization Mode
   const [selectedSort, setSelectedSort] = useState<SortOption>(
     (currentSort as SortOption) || "sku_courier"
   );
@@ -69,7 +147,7 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
     }
   }, [currentSort]);
 
-  // Exclusion Sets for Interactive Filter Selection (Crossed-out items)
+  // Exclusion Sets
   const [excludedMainSkus, setExcludedMainSkus] = useState<Set<string>>(
     new Set(activeExcludedMainSkus.map((s) => s.toUpperCase()))
   );
@@ -79,8 +157,10 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
   const [excludedCouriers, setExcludedCouriers] = useState<Set<string>>(
     new Set(activeExcludedCouriers.map((s) => s.toUpperCase()))
   );
+  const [excludedMarketplaces, setExcludedMarketplaces] = useState<Set<string>>(
+    new Set((activeExcludedMarketplaces || []).map((s) => s.toUpperCase()))
+  );
 
-  // Keep in sync with incoming active props
   useEffect(() => {
     setExcludedMainSkus(new Set((activeExcludedMainSkus || []).map((s) => s.toUpperCase())));
   }, [activeExcludedMainSkus]);
@@ -93,13 +173,19 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
     setExcludedCouriers(new Set((activeExcludedCouriers || []).map((s) => s.toUpperCase())));
   }, [activeExcludedCouriers]);
 
-  // Check if current user selections differ from active PDF settings
+  useEffect(() => {
+    setExcludedMarketplaces(new Set((activeExcludedMarketplaces || []).map((s) => s.toUpperCase())));
+  }, [activeExcludedMarketplaces]);
+
+  // Check if changes differ from active PDF settings or pending SKU assignments
   const hasChanges = useMemo(() => {
+    if (pendingResolutions.length > 0) return true;
     if (selectedSort !== currentSort) return true;
 
     const propMain = new Set((activeExcludedMainSkus || []).map((s) => s.toUpperCase()));
     const propSku = new Set((activeExcludedSkus || []).map((s) => s.toUpperCase()));
     const propCourier = new Set((activeExcludedCouriers || []).map((s) => s.toUpperCase()));
+    const propMarketplace = new Set((activeExcludedMarketplaces || []).map((s) => s.toUpperCase()));
 
     if (excludedMainSkus.size !== propMain.size) return true;
     for (const item of excludedMainSkus) {
@@ -116,80 +202,105 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
       if (!propCourier.has(item)) return true;
     }
 
+    if (excludedMarketplaces.size !== propMarketplace.size) return true;
+    for (const item of excludedMarketplaces) {
+      if (!propMarketplace.has(item)) return true;
+    }
+
     return false;
   }, [
+    pendingResolutions.length,
     selectedSort,
     currentSort,
     excludedMainSkus,
     excludedSkus,
     excludedCouriers,
+    excludedMarketplaces,
     activeExcludedMainSkus,
     activeExcludedSkus,
     activeExcludedCouriers,
+    activeExcludedMarketplaces,
   ]);
 
-  const totalExcludedItemsCount =
-    excludedMainSkus.size + excludedSkus.size + excludedCouriers.size;
+  const totalDetectedLabels = useMemo(() => {
+    return localMainSkus.reduce((sum, g) => sum + g.label_count, 0);
+  }, [localMainSkus]);
 
-  // Single Action: Apply both sort and exclusions in one click
-  const handleApplyClick = () => {
+  const totalExcludedItemsCount =
+    excludedMainSkus.size + excludedSkus.size + excludedCouriers.size + excludedMarketplaces.size;
+
+  const handleApplyClick = async () => {
+    if (isReSorting) return;
+    setInlineError(null);
+
+    // 1. Atomically resolve all pending SKU assignments in this 1 click
+    if (pendingResolutions.length > 0 && onConfirmSku) {
+      try {
+        await onConfirmSku({ resolutions: pendingResolutions });
+        setPendingResolutions([]);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Failed to update PDF with confirmed SKUs.";
+        setInlineError(msg);
+        return;
+      }
+    }
+
+    // 2. Apply batch sort & exclusions
     const params = {
       sort: selectedSort,
       excluded_main_skus: Array.from(excludedMainSkus),
       excluded_skus: Array.from(excludedSkus),
       excluded_couriers: Array.from(excludedCouriers),
+      excluded_marketplaces: Array.from(excludedMarketplaces),
+      smart_sku_detection: smartSort,
     };
 
     if (onUpdateBatch) {
       onUpdateBatch(params);
     } else {
-      if (onApplySort && selectedSort !== currentSort) {
-        onApplySort(selectedSort);
-      }
-      if (onApplyFilters) {
-        onApplyFilters({
-          excluded_main_skus: params.excluded_main_skus,
-          excluded_skus: params.excluded_skus,
-          excluded_couriers: params.excluded_couriers,
-        });
-      }
+      if (onApplySort && selectedSort !== currentSort) onApplySort(selectedSort);
+      if (onApplyFilters) onApplyFilters(params);
     }
   };
 
-  // Reset all exclusions back to active
   const handleResetAllExclusions = () => {
     setExcludedMainSkus(new Set());
     setExcludedSkus(new Set());
     setExcludedCouriers(new Set());
+    setExcludedMarketplaces(new Set());
 
     const params = {
       sort: selectedSort,
       excluded_main_skus: [],
       excluded_skus: [],
       excluded_couriers: [],
+      excluded_marketplaces: [],
+      smart_sku_detection: smartSort,
     };
 
     if (onUpdateBatch) {
       onUpdateBatch(params);
     } else if (onApplyFilters) {
-      onApplyFilters({
-        excluded_main_skus: [],
-        excluded_skus: [],
-        excluded_couriers: [],
-      });
+      onApplyFilters(params);
     }
   };
 
-  // Toggle Handlers
   const toggleExcludeMainSku = (mainSkuName: string) => {
     const key = mainSkuName.toUpperCase();
     setExcludedMainSkus((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleExcludeMarketplace = (mpName: string) => {
+    const key = mpName.toUpperCase();
+    setExcludedMarketplaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -198,11 +309,8 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
     const key = skuName.toUpperCase();
     setExcludedSkus((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -211,20 +319,11 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
     const key = courierName.toUpperCase();
     setExcludedCouriers((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
-
-  // Filter by Main SKU in All SKUs tab
-  const [selectedMainSkuFilter, setSelectedMainSkuFilter] = useState<string | null>(null);
-
-  // Expanded Main SKU cards in Main SKU tab
-  const [expandedMainSkus, setExpandedMainSkus] = useState<Record<string, boolean>>({});
 
   const toggleExpandMainSku = (mainSkuName: string) => {
     setExpandedMainSkus((prev) => ({
@@ -233,885 +332,2071 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
     }));
   };
 
-  const handleStartEditSku = (sku: string) => {
-    setEditingMainSku(sku);
-    setEditSkuName(sku);
-    setEditKeyword(sku);
-    setEditSuccessSku(null);
+  const handleStartEditSku = async (mainSkuName: string, subSkus?: { sku: string }[]) => {
+    setEditingMainSku(mainSkuName);
+    setEditSkuName(mainSkuName);
+    setIsLoadingSkuKeywords(true);
+    setIsCustomUserSku(false);
+    setInlineError(null);
+
+    // Fallback ONLY for unsaved temporary batch-only SKUs
+    const batchVariants = (subSkus && subSkus.length > 0)
+      ? subSkus.map((s) => s.sku).filter((s) => Boolean(s) && s !== "UNMATCHED")
+      : [mainSkuName];
+
+    let finalValues = batchVariants;
+    const upperKey = mainSkuName.trim().toUpperCase();
+
+    // 1. Check local cache (userSkusMap) - strictly show only user's explicitly saved keywords
+    const cached = userSkusMap[upperKey];
+    if (cached && cached.keywords && cached.keywords.length > 0) {
+      finalValues = cached.keywords;
+      setEditSkuName(cached.sku_code || mainSkuName);
+      setIsCustomUserSku(true);
+      setEditKeyword(finalValues.join(", "));
+      setInitialKws(finalValues);
+      setIsLoadingSkuKeywords(false);
+      return;
+    }
+
+    // 2. Query personal SKU database directly for this SKU
+    try {
+      const res = await apiGetSkus({ search: mainSkuName.trim(), size: 20 });
+      const matched = res.items.find(
+        (it) => it.sku_code.trim().toUpperCase() === upperKey
+      );
+      if (matched && matched.keywords && matched.keywords.length > 0) {
+        finalValues = matched.keywords;
+        setEditSkuName(matched.sku_code);
+        setIsCustomUserSku(true);
+        setUserSkusMap((prev) => ({
+          ...prev,
+          [upperKey]: matched,
+        }));
+      }
+    } catch {
+      // Guest mode or offline fallback
+    } finally {
+      setIsLoadingSkuKeywords(false);
+    }
+
+    setInitialKws(finalValues);
+    setEditKeyword(finalValues.join(", "));
   };
 
   const handleCancelEditSku = () => {
     setEditingMainSku(null);
     setEditSkuName("");
     setEditKeyword("");
-    setEditSuccessSku(null);
+    setInitialKws([]);
+    setIsCustomUserSku(false);
+    setInlineError(null);
   };
 
-  const handleSaveEditSku = async (originalSku: string) => {
-    if (!onConfirmSku) return;
+  const handleSaveEditSku = async (oldSkuName: string) => {
+    const cleanNewSku = editSkuName.trim().toUpperCase();
+    if (!cleanNewSku) return;
+
+    setInlineError(null);
+    setIsSavingSku(true);
+    try {
+      // Split multiple keywords by commas, semicolons, or newlines
+      const parsedKws = editKeyword
+        .split(/[,;\n\r]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const finalKws = parsedKws.length > 0 ? Array.from(new Set(parsedKws)) : [cleanNewSku];
+
+      // Update in personal catalog if authenticated
+      const existingDoc = userSkusMap[oldSkuName.trim().toUpperCase()] || userSkusMap[cleanNewSku];
+      const skuId = existingDoc?.id || (existingDoc as any)?._id;
+      if (existingDoc && skuId) {
+        try {
+          await apiUpdateSku(skuId, {
+            sku_code: cleanNewSku,
+            product_name: cleanNewSku,
+            keywords: finalKws,
+          });
+          setUserSkusMap((prev) => ({
+            ...prev,
+            [cleanNewSku]: { ...existingDoc, sku_code: cleanNewSku, product_name: cleanNewSku, keywords: finalKws },
+          }));
+        } catch (e) {
+          console.warn("apiUpdateSku failed:", e);
+        }
+      } else {
+        try {
+          const created = await apiCreateSku({
+            sku_code: cleanNewSku,
+            product_name: cleanNewSku,
+            keywords: finalKws,
+            aliases: [],
+            priority: 0,
+            is_active: true,
+          });
+          setUserSkusMap((prev) => ({
+            ...prev,
+            [cleanNewSku]: created,
+          }));
+        } catch (e) {
+          console.warn("apiCreateSku failed:", e);
+        }
+      }
+
+      // Update local SKU list immediately
+      setLocalMainSkus((prev) => {
+        return prev.map((grp) => {
+          if (grp.main_sku.toUpperCase() === oldSkuName.trim().toUpperCase()) {
+            return {
+              ...grp,
+              main_sku: cleanNewSku,
+              sub_skus: grp.sub_skus.map((s) => ({ ...s, main_sku: cleanNewSku })),
+            };
+          }
+          return grp;
+        });
+      });
+
+      // Queue resolution for PDF update
+      setPendingResolutions((prev) => [
+        ...prev.filter((r) => r.oldSku !== oldSkuName),
+        { oldSku: oldSkuName, newSku: cleanNewSku, keyword: finalKws.join(", ") },
+      ]);
+
+      setEditSuccessSku(cleanNewSku);
+      setTimeout(() => setEditSuccessSku(null), 3000);
+      setEditingMainSku(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save SKU mapping.";
+      setInlineError(msg);
+    } finally {
+      setIsSavingSku(false);
+    }
+  };
+
+  const handleConfirmSplitVariant = async (parentMainSku: string, variantSku: string) => {
+    const cleanSplitSku = splitTargetSku.trim().toUpperCase();
+    if (!cleanSplitSku) return;
+
+    setInlineError(null);
     setIsConfirmingSku(true);
     try {
-      await onConfirmSku({
-        oldSku: originalSku,
-        newSku: editSkuName.trim() || originalSku,
-        keyword: editKeyword.trim() || originalSku,
-      });
-      setEditSuccessSku(originalSku);
-      setTimeout(() => {
-        setEditSuccessSku(null);
-        setEditingMainSku(null);
-      }, 1000);
-    } catch (err) {
-      console.error("Failed to confirm SKU:", err);
+      if (onConfirmSku) {
+        await onConfirmSku({
+          oldSku: parentMainSku,
+          newSku: cleanSplitSku,
+          keyword: variantSku,
+        });
+      }
+      setSplittingVariant(null);
+      setSplitTargetSku("");
+      setEditSuccessSku(cleanSplitSku);
+      setTimeout(() => setEditSuccessSku(null), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to split variant.";
+      setInlineError(msg);
     } finally {
       setIsConfirmingSku(false);
     }
   };
 
-  // Sorting and Filtering for All Sub-SKUs
-  const sortedSubSkus = useMemo(() => {
-    let list = [...data.all_skus];
-    if (selectedMainSkuFilter) {
-      list = list.filter((item) => item.main_sku === selectedMainSkuFilter);
+  const handleSaveSkuToCatalog = async (skuName: string, subSkus?: { sku: string }[]) => {
+    const cleanName = skuName.trim().toUpperCase();
+    setSavingCatalogSku(cleanName);
+    setInlineError(null);
+    try {
+      const kws = subSkus && subSkus.length > 0
+        ? Array.from(new Set([cleanName, ...subSkus.map((s) => s.sku).filter((s) => Boolean(s) && s !== "UNMATCHED")]))
+        : [cleanName];
+
+      // Validate cross-SKU uniqueness against userSkusMap
+      for (const kw of kws) {
+        const lowerKw = kw.toLowerCase();
+        for (const [otherCode, otherDoc] of Object.entries(userSkusMap)) {
+          if (otherCode !== cleanName) {
+            const otherVals = [otherCode.toLowerCase(), ...(otherDoc.keywords || []).map((k) => k.toLowerCase())];
+            if (otherVals.includes(lowerKw)) {
+              throw new Error(`The value '${kw}' is already assigned to SKU '${otherCode}'. Two SKUs cannot share the same value.`);
+            }
+          }
+        }
+      }
+
+      const created = await apiCreateSku({
+        sku_code: cleanName,
+        product_name: cleanName,
+        keywords: kws,
+        aliases: [],
+        priority: 0,
+        is_active: true,
+      });
+
+      setUserSkusMap((prev) => ({
+        ...prev,
+        [cleanName]: created,
+      }));
+      setEditSuccessSku(cleanName);
+      setTimeout(() => setEditSuccessSku(null), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save SKU to personal catalog.";
+      setInlineError(msg);
+    } finally {
+      setSavingCatalogSku(null);
+    }
+  };
+
+  const handleAssignVariantToExisting = async (variantSku: string, targetSku: string) => {
+    if (!targetSku) return;
+    setInlineError(null);
+    setIsSavingSku(true);
+    try {
+      const cleanTarget = targetSku.trim().toUpperCase();
+      const cleanVariant = variantSku.trim();
+
+      // 1. Fast DB Save in background
+      const existingDoc = userSkusMap[cleanTarget];
+      const skuId = existingDoc?.id || (existingDoc as any)?._id;
+      if (existingDoc && skuId) {
+        const currentKws = existingDoc.keywords || [];
+        if (!currentKws.map((k) => k.toLowerCase()).includes(cleanVariant.toLowerCase())) {
+          const updatedKws = [...currentKws, cleanVariant];
+          try {
+            await apiUpdateSku(skuId, { keywords: updatedKws });
+            setUserSkusMap((prev) => ({
+              ...prev,
+              [cleanTarget]: { ...existingDoc, keywords: updatedKws },
+            }));
+          } catch (e) {
+            console.warn("apiUpdateSku failed:", e);
+          }
+        }
+      } else {
+        try {
+          const created = await apiCreateSku({
+            sku_code: cleanTarget,
+            product_name: cleanTarget,
+            keywords: [cleanTarget, cleanVariant],
+            aliases: [],
+            priority: 0,
+            is_active: true,
+          });
+          setUserSkusMap((prev) => ({
+            ...prev,
+            [cleanTarget]: created,
+          }));
+        } catch (e) {
+          console.warn("apiCreateSku failed:", e);
+        }
+      }
+
+      // 2. Instant Local UI State Update (< 50ms, zero lag!)
+      setLocalMainSkus((prev) => {
+        let movedSub: any = null;
+
+        const next = prev.map((grp) => {
+          const u = grp.main_sku.toUpperCase();
+          if (u === "UNKNOWN" || u === "UNKNOWN SKUS" || u === "UNMATCHED") {
+            const found = grp.sub_skus.find((s) => s.sku === cleanVariant);
+            if (found) movedSub = found;
+            const remainingSubs = grp.sub_skus.filter((s) => s.sku !== cleanVariant);
+            const countDiff = found ? found.label_count : 0;
+            return {
+              ...grp,
+              label_count: Math.max(0, grp.label_count - countDiff),
+              total_quantity: Math.max(0, grp.total_quantity - countDiff),
+              sub_skus: remainingSubs,
+            };
+          }
+          return grp;
+        });
+
+        if (movedSub) {
+          const targetIndex = next.findIndex((g) => g.main_sku.toUpperCase() === cleanTarget);
+          if (targetIndex >= 0) {
+            const tg = next[targetIndex];
+            next[targetIndex] = {
+              ...tg,
+              label_count: tg.label_count + movedSub.label_count,
+              total_quantity: tg.total_quantity + movedSub.quantity,
+              sub_skus: [...tg.sub_skus, { ...movedSub, main_sku: cleanTarget }],
+            };
+          } else {
+            next.push({
+              main_sku: cleanTarget,
+              label_count: movedSub.label_count,
+              total_quantity: movedSub.quantity,
+              courier_counts: {},
+              sub_skus: [{ ...movedSub, main_sku: cleanTarget }],
+            });
+          }
+        }
+        return next;
+      });
+
+      // 3. Queue resolution for 1-click PDF update
+      setPendingResolutions((prev) => [
+        ...prev.filter((r) => r.oldSku !== cleanVariant),
+        { oldSku: cleanVariant, newSku: cleanTarget, keyword: cleanVariant },
+      ]);
+
+      setAssigningVariant(null);
+      setAssignMode(null);
+      setSelectedExistingSku("");
+      setEditSuccessSku(cleanTarget);
+      setTimeout(() => setEditSuccessSku(null), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to assign variant to SKU.";
+      setInlineError(msg);
+    } finally {
+      setIsSavingSku(false);
+    }
+  };
+
+  const handleCreateAndAssignNewSku = async (variantSku: string, newSkuName: string) => {
+    const cleanName = newSkuName.trim().toUpperCase();
+    if (!cleanName) return;
+    setInlineError(null);
+    setIsSavingSku(true);
+    try {
+      const cleanVariant = variantSku.trim();
+
+      // 1. Save new SKU in personal catalog
+      try {
+        const created = await apiCreateSku({
+          sku_code: cleanName,
+          product_name: cleanName,
+          keywords: Array.from(new Set([cleanName, cleanVariant])),
+          aliases: [],
+          priority: 0,
+          is_active: true,
+        });
+        setUserSkusMap((prev) => ({
+          ...prev,
+          [cleanName]: created,
+        }));
+      } catch (e) {
+        console.warn("apiCreateSku failed:", e);
+      }
+
+      // 2. Instant Local UI State Update
+      setLocalMainSkus((prev) => {
+        let movedSub: any = null;
+
+        const next = prev.map((grp) => {
+          const u = grp.main_sku.toUpperCase();
+          if (u === "UNKNOWN" || u === "UNKNOWN SKUS" || u === "UNMATCHED") {
+            const found = grp.sub_skus.find((s) => s.sku === cleanVariant);
+            if (found) movedSub = found;
+            const remainingSubs = grp.sub_skus.filter((s) => s.sku !== cleanVariant);
+            const countDiff = found ? found.label_count : 0;
+            return {
+              ...grp,
+              label_count: Math.max(0, grp.label_count - countDiff),
+              total_quantity: Math.max(0, grp.total_quantity - countDiff),
+              sub_skus: remainingSubs,
+            };
+          }
+          return grp;
+        });
+
+        if (movedSub) {
+          const targetIndex = next.findIndex((g) => g.main_sku.toUpperCase() === cleanName);
+          if (targetIndex >= 0) {
+            const tg = next[targetIndex];
+            next[targetIndex] = {
+              ...tg,
+              label_count: tg.label_count + movedSub.label_count,
+              total_quantity: tg.total_quantity + movedSub.quantity,
+              sub_skus: [...tg.sub_skus, { ...movedSub, main_sku: cleanName }],
+            };
+          } else {
+            next.push({
+              main_sku: cleanName,
+              label_count: movedSub.label_count,
+              total_quantity: movedSub.quantity,
+              courier_counts: {},
+              sub_skus: [{ ...movedSub, main_sku: cleanName }],
+            });
+          }
+        }
+        return next;
+      });
+
+      // 3. Queue resolution for 1-click PDF update
+      setPendingResolutions((prev) => [
+        ...prev.filter((r) => r.oldSku !== cleanVariant),
+        { oldSku: cleanVariant, newSku: cleanName, keyword: cleanVariant },
+      ]);
+
+      setAssigningVariant(null);
+      setAssignMode(null);
+      setNewSkuInput("");
+      setEditSuccessSku(cleanName);
+      setTimeout(() => setEditSuccessSku(null), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create new SKU.";
+      setInlineError(msg);
+    } finally {
+      setIsSavingSku(false);
+    }
+  };
+
+  const handleBulkAddSku = async () => {
+    const rawKw = bulkCommonKeyword.trim();
+    if (!rawKw) {
+      setInlineError("Kripya common word ya keyword enter karein (e.g. 'brown' ya 'rspk').");
+      return;
     }
 
-    list.sort((a, b) => {
-      if (sortBy === "name") {
-        const comp = a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: "base" });
-        return sortAsc ? comp : -comp;
+    setInlineError(null);
+    setIsSavingSku(true);
+
+    try {
+      let targetSku = "";
+
+      if (bulkAddMode === "existing") {
+        targetSku = (bulkSelectedExistingSku || allKnownCodes[0] || "").trim().toUpperCase();
+        if (!targetSku) {
+          throw new Error("Kripya existing SKU select karein ya 'New SKU banana hai' choose karein.");
+        }
+
+        // Add keyword to catalog in background
+        const existingDoc = userSkusMap[targetSku];
+        const skuId = existingDoc?.id || (existingDoc as any)?._id;
+        if (existingDoc && skuId) {
+          const currentKws = existingDoc.keywords || [];
+          const updatedKws = Array.from(new Set([...currentKws, rawKw]));
+          try {
+            await apiUpdateSku(skuId, { keywords: updatedKws });
+            setUserSkusMap((prev) => ({
+              ...prev,
+              [targetSku]: { ...existingDoc, keywords: updatedKws },
+            }));
+          } catch (e) {
+            console.warn("apiUpdateSku failed:", e);
+          }
+        } else {
+          try {
+            const created = await apiCreateSku({
+              sku_code: targetSku,
+              product_name: targetSku,
+              keywords: [targetSku, rawKw],
+              aliases: [],
+              priority: 0,
+              is_active: true,
+            });
+            setUserSkusMap((prev) => ({
+              ...prev,
+              [targetSku]: created,
+            }));
+          } catch (e) {
+            console.warn("apiCreateSku failed:", e);
+          }
+        }
       } else {
-        const comp = a.label_count - b.label_count;
-        return sortAsc ? comp : -comp;
+        targetSku = bulkNewSkuName.trim().toUpperCase();
+        if (!targetSku) {
+          throw new Error("Kripya naya SKU name enter karein (jaise 'BROWN' ya 'ROSPACK-BROWN').");
+        }
+
+        try {
+          const created = await apiCreateSku({
+            sku_code: targetSku,
+            product_name: targetSku,
+            keywords: Array.from(new Set([targetSku, rawKw])),
+            aliases: [],
+            priority: 0,
+            is_active: true,
+          });
+          setUserSkusMap((prev) => ({
+            ...prev,
+            [targetSku]: created,
+          }));
+        } catch (e) {
+          console.warn("apiCreateSku failed:", e);
+        }
       }
+
+      // Filter matching variants from unknownGroup
+      const matchedSubs = matchingVariants;
+      const matchedSkusSet = new Set(matchedSubs.map((s) => s.sku));
+      const matchedLabelsCount = matchedSubs.reduce((sum, s) => sum + s.label_count, 0);
+
+      // Instant Local UI update
+      setLocalMainSkus((prev) => {
+        const next = prev.map((grp) => {
+          const u = grp.main_sku.toUpperCase();
+          if (u === "UNKNOWN" || u === "UNKNOWN SKUS" || u === "UNMATCHED") {
+            return {
+              ...grp,
+              label_count: Math.max(0, grp.label_count - matchedLabelsCount),
+              total_quantity: Math.max(0, grp.total_quantity - matchedLabelsCount),
+              sub_skus: grp.sub_skus.filter((s) => !matchedSkusSet.has(s.sku)),
+            };
+          }
+          return grp;
+        });
+
+        const targetIndex = next.findIndex((g) => g.main_sku.toUpperCase() === targetSku);
+        const mappedSubs = matchedSubs.map((s) => ({ ...s, main_sku: targetSku }));
+        if (targetIndex >= 0) {
+          const tg = next[targetIndex];
+          next[targetIndex] = {
+            ...tg,
+            label_count: tg.label_count + matchedLabelsCount,
+            total_quantity: tg.total_quantity + matchedLabelsCount,
+            sub_skus: [...tg.sub_skus, ...mappedSubs],
+          };
+        } else {
+          next.push({
+            main_sku: targetSku,
+            label_count: matchedLabelsCount,
+            total_quantity: matchedLabelsCount,
+            courier_counts: {},
+            sub_skus: mappedSubs,
+          });
+        }
+        return next;
+      });
+
+      // Queue resolutions for 1-click PDF update
+      const newResolutions = matchedSubs.map((m) => ({
+        oldSku: m.sku,
+        newSku: targetSku,
+        keyword: rawKw,
+      }));
+      setPendingResolutions((prev) => [
+        ...prev.filter((r) => !newResolutions.some((nr) => nr.oldSku === r.oldSku)),
+        ...newResolutions,
+      ]);
+
+      setIsBulkAddOpen(false);
+      setBulkCommonKeyword("");
+      setBulkNewSkuName("");
+      setEditSuccessSku(targetSku);
+      setTimeout(() => setEditSuccessSku(null), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to add SKU and re-filter batch.";
+      setInlineError(msg);
+    } finally {
+      setIsSavingSku(false);
+    }
+  };
+
+  // Group separation: Available (Saved) SKUs first, then UNKNOWN group, then UNMATCHED
+  const availableMainSkus = useMemo(() => {
+    return localMainSkus.filter((g) => {
+      const u = g.main_sku.trim().toUpperCase();
+      return u !== "UNKNOWN" && u !== "UNKNOWN SKUS" && u !== "UNMATCHED";
+    });
+  }, [localMainSkus]);
+
+  const unknownGroup = useMemo(() => {
+    const rawUnknown = localMainSkus.find((g) => {
+      const u = g.main_sku.trim().toUpperCase();
+      return u === "UNKNOWN" || u === "UNKNOWN SKUS";
+    });
+    const rawUnmatched = localMainSkus.find((g) => {
+      const u = g.main_sku.trim().toUpperCase();
+      return u === "UNMATCHED";
     });
 
-    return list;
-  }, [data.all_skus, selectedMainSkuFilter, sortBy, sortAsc]);
+    if (!rawUnknown && !rawUnmatched) return null;
 
-  // Courier list sorted descending by count
+    const combinedSubs = [
+      ...(rawUnknown?.sub_skus || []),
+      ...(rawUnmatched?.sub_skus || []),
+    ];
+    const totalCount = (rawUnknown?.label_count || 0) + (rawUnmatched?.label_count || 0);
+
+    return {
+      main_sku: "UNKNOWN",
+      total_quantity: (rawUnknown?.total_quantity || 0) + (rawUnmatched?.total_quantity || 0),
+      label_count: totalCount,
+      courier_counts: {
+        ...(rawUnknown?.courier_counts || {}),
+        ...(rawUnmatched?.courier_counts || {}),
+      },
+      sub_skus: combinedSubs,
+    };
+  }, [localMainSkus]);
+
+  // Alphanumeric natural letter-wise and number-wise sorted list
+  const sortedAvailableMainSkus = useMemo(() => {
+    const list = [...availableMainSkus];
+    if (smartSort) {
+      list.sort((a, b) => a.main_sku.localeCompare(b.main_sku, undefined, { numeric: true, sensitivity: "base" }));
+    }
+    return list;
+  }, [availableMainSkus, smartSort]);
+
+  const sortedUnknownSubSkus = useMemo(() => {
+    if (!unknownGroup || !unknownGroup.sub_skus) return [];
+    const list = [...unknownGroup.sub_skus];
+    if (smartSort) {
+      list.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: "base" }));
+    }
+    return list;
+  }, [unknownGroup?.sub_skus, smartSort]);
+
+  const allKnownCodes = useMemo(() => {
+    return Array.from(new Set([
+      ...availableMainSkus.map((g) => g.main_sku.trim().toUpperCase()),
+      ...Object.keys(userSkusMap),
+    ])).filter((c) => c && c !== "UNKNOWN" && c !== "UNMATCHED");
+  }, [availableMainSkus, userSkusMap]);
+
+  // Suggested common keywords extracted from current unknown variants
+  const suggestedWords = useMemo(() => {
+    if (!unknownGroup || !unknownGroup.sub_skus) return [];
+    const stopWords = new Set(["the", "and", "for", "set", "best", "wear", "daily", "fragrance"]);
+    const wordCounts: Record<string, number> = {};
+
+    for (const sub of unknownGroup.sub_skus) {
+      const text = sub.sku.replace(/([a-z])([A-Z])/g, "$1 $2");
+      const tokens = text.match(/[A-Za-z0-9]+/g) || [];
+      for (const t of tokens) {
+        const subTokens = t.match(/[A-Za-z]+|\d+/g) || [];
+        for (const st of subTokens) {
+          const lower = st.toLowerCase();
+          if (lower.length >= 3 && !stopWords.has(lower)) {
+            wordCounts[lower] = (wordCounts[lower] || 0) + 1;
+          }
+        }
+      }
+    }
+
+    return Object.keys(wordCounts)
+      .sort((a, b) => wordCounts[b] - wordCounts[a] || b.length - a.length)
+      .slice(0, 8);
+  }, [unknownGroup]);
+
+  // Real-time matching preview for common keyword
+  const matchingVariants = useMemo(() => {
+    if (!unknownGroup || !bulkCommonKeyword.trim()) return [];
+    const q = bulkCommonKeyword.trim().toLowerCase();
+    return (unknownGroup.sub_skus || []).filter((s) => s.sku.toLowerCase().includes(q));
+  }, [unknownGroup, bulkCommonKeyword]);
+
+  const matchingLabelsCount = useMemo(() => {
+    return matchingVariants.reduce((sum, s) => sum + s.label_count, 0);
+  }, [matchingVariants]);
+
+  const remainingVariantsCount = useMemo(() => {
+    if (!unknownGroup || !unknownGroup.sub_skus) return 0;
+    return unknownGroup.sub_skus.length - matchingVariants.length;
+  }, [unknownGroup, matchingVariants]);
+
+  // Filter & sort Sub SKUs for Tab 2
+  const sortedSubSkus = useMemo(() => {
+    let list = [...data.all_skus].filter((s) => s.sku !== "UNMATCHED" && s.main_sku !== "UNMATCHED");
+    if (selectedMainSkuFilter) {
+      list = list.filter((s) => s.main_sku === selectedMainSkuFilter);
+    }
+    if (skuSearchQuery.trim()) {
+      const q = skuSearchQuery.trim().toLowerCase();
+      list = list.filter((s) => s.sku.toLowerCase().includes(q) || s.main_sku.toLowerCase().includes(q));
+    }
+    list.sort((a, b) => {
+      if (sortBy === "count") {
+        return sortAsc ? a.label_count - b.label_count : b.label_count - a.label_count;
+      }
+      return sortAsc ? a.sku.localeCompare(b.sku) : b.sku.localeCompare(a.sku);
+    });
+    return list;
+  }, [data.all_skus, selectedMainSkuFilter, skuSearchQuery, sortBy, sortAsc]);
+
   const sortedCouriers = useMemo(() => {
     return [...data.courier_breakdown].sort((a, b) => b.label_count - a.label_count);
   }, [data.courier_breakdown]);
 
-  // Color helper for Main SKU branding
-  const getMainSkuColorStyle = (name: string, isExcluded: boolean) => {
+  const getMainSkuColorStyle = (name: string, isExcluded: boolean = false) => {
     if (isExcluded) {
       return {
-        border: "border-rose-900/60 hover:border-rose-700 bg-rose-950/25",
-        badge: "bg-rose-950/90 text-rose-300 border-rose-700/80",
+        border: "border-rose-300 dark:border-rose-900/50 bg-rose-50/50 dark:bg-rose-950/20",
+        badge: "bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60",
         dot: "bg-rose-500",
-        pill: "bg-rose-950/40 text-rose-300 border-rose-700/60",
       };
     }
     const upper = name.toUpperCase();
     if (upper.includes("BROWN")) {
       return {
-        border: "border-amber-600/50 hover:border-amber-500 bg-navy-950/80",
-        badge: "bg-amber-950/60 text-amber-300 border-amber-600/60",
+        border: "border-amber-300 dark:border-amber-700/40 hover:border-amber-400 dark:hover:border-amber-600/70 bg-amber-50/60 dark:bg-slate-900/60",
+        badge: "bg-amber-100 dark:bg-amber-950/50 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-700/50",
         dot: "bg-amber-500",
-        pill: "bg-amber-500/15 text-amber-300 border-amber-500/30",
       };
     }
     if (upper.includes("GREEN")) {
       return {
-        border: "border-emerald-600/50 hover:border-emerald-500 bg-navy-950/80",
-        badge: "bg-emerald-950/60 text-emerald-300 border-emerald-600/60",
+        border: "border-emerald-300 dark:border-emerald-700/40 hover:border-emerald-400 dark:hover:border-emerald-600/70 bg-emerald-50/60 dark:bg-slate-900/60",
+        badge: "bg-emerald-100 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700/50",
         dot: "bg-emerald-500",
-        pill: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
       };
     }
     if (upper.includes("PINK")) {
       return {
-        border: "border-pink-600/50 hover:border-pink-500 bg-navy-950/80",
-        badge: "bg-pink-950/60 text-pink-300 border-pink-600/60",
+        border: "border-pink-300 dark:border-pink-700/40 hover:border-pink-400 dark:hover:border-pink-600/70 bg-pink-50/60 dark:bg-slate-900/60",
+        badge: "bg-pink-100 dark:bg-pink-950/50 text-pink-900 dark:text-pink-300 border border-pink-300 dark:border-pink-700/50",
         dot: "bg-pink-500",
-        pill: "bg-pink-500/15 text-pink-300 border-pink-500/30",
       };
     }
     if (upper.includes("BLUE")) {
       return {
-        border: "border-sky-600/50 hover:border-sky-500 bg-navy-950/80",
-        badge: "bg-sky-950/60 text-sky-300 border-sky-600/60",
+        border: "border-sky-300 dark:border-sky-700/40 hover:border-sky-400 dark:hover:border-sky-600/70 bg-sky-50/60 dark:bg-slate-900/60",
+        badge: "bg-sky-100 dark:bg-sky-950/50 text-sky-900 dark:text-sky-300 border border-sky-300 dark:border-sky-700/50",
         dot: "bg-sky-500",
-        pill: "bg-sky-500/15 text-sky-300 border-sky-500/30",
       };
     }
     return {
-      border: "border-cyan-neon/40 hover:border-cyan-neon bg-navy-950/80",
-      badge: "bg-cyan-950/60 text-cyan-300 border-cyan-neon/40",
-      dot: "bg-cyan-neon",
-      pill: "bg-cyan-neon/15 text-cyan-neon border-cyan-neon/30",
+      border: "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/70 dark:bg-slate-900/60",
+      badge: "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700",
+      dot: "bg-indigo-500 dark:bg-indigo-400",
     };
   };
-
-  if (isLoading) {
-    return (
-      <div className="w-full bg-[#0C182B] border border-cyan-neon/30 rounded-2xl p-5 my-4 animate-pulse">
-        <div className="flex items-center space-x-3 mb-4">
-          <div className="w-5 h-5 border-2 border-cyan-neon border-t-transparent rounded-full animate-spin" />
-          <div className="h-4 bg-navy-700 rounded w-64" />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-20 bg-navy-800 rounded-xl" />
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   const formatCourierName = (c: string) => {
     if (c.toLowerCase() === "xpressbees") return "Xpress Bees";
     return c;
   };
 
+  if (isLoading) {
+    return (
+      <div className="w-full bg-white dark:bg-[#0A101D] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 animate-pulse h-full flex flex-col justify-center items-center">
+        <div className="w-6 h-6 border-2 border-indigo-500 dark:border-indigo-400 border-t-transparent rounded-full animate-spin mb-3" />
+        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Analyzing Batch SKUs & Couriers...</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="w-full bg-[#0C182B] border border-cyan-neon/30 rounded-2xl p-4 sm:p-5 my-4 shadow-xl transition-all">
-      {/* 1. Header with Title and Mode Switch Tabs */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-3.5 border-b border-navy-700/80 gap-3">
-        <div className="flex items-center space-x-2.5">
-          <span className="flex h-3 w-3 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-neon opacity-75" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-neon" />
-          </span>
-          <div>
-            <h3 className="text-sm sm:text-base font-bold text-white tracking-tight flex items-center space-x-2">
-              <span>PDF Batch Summary</span>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-neon/15 border border-cyan-neon/40 text-cyan-neon font-mono font-bold">
-                {data.total_labels} Labels Detected
+    <div className="w-full h-full flex flex-col bg-white dark:bg-[#0A101D] border border-slate-200 dark:border-slate-800/90 rounded-2xl shadow-xl overflow-hidden transition-colors">
+      {/* 1. Header Bar: Title, Count & Linear-style Segmented Tabs */}
+      <div className="p-4 border-b border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/60 flex-shrink-0 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white tracking-tight">Batch Summary</h3>
+            {totalDetectedLabels > data.total_labels ? (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono font-bold border border-amber-500/30">
+                {data.total_labels} / {totalDetectedLabels} Labels ({totalDetectedLabels - data.total_labels} Excluded)
               </span>
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Click (✕) on any card to exclude unwanted orders, then click &apos;Update PDF&apos;
-            </p>
+            ) : (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono font-bold border border-slate-200 dark:border-slate-700/80">
+                {data.total_labels} Labels
+              </span>
+            )}
           </div>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">
+            Interactive Filter
+          </span>
         </div>
 
-        {/* 3 Dedicated Mode Tabs: Main SKU, All Sub-SKUs, Courier Partner */}
-        <div className="flex items-center bg-navy-950/90 p-1 rounded-xl border border-navy-700 self-start sm:self-auto space-x-1">
+        {/* 4 Modern Segmented Tabs */}
+        <div className="grid grid-cols-4 p-1 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/90 text-xs font-semibold gap-1">
           <button
             type="button"
             onClick={() => setActiveTab("main_sku")}
-            className={`px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
+            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
               activeTab === "main_sku"
-                ? "bg-cyan-neon text-navy-950 shadow-md font-extrabold"
-                : "text-slate-300 hover:text-white"
+                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             }`}
           >
-            <span>🏷️ Main SKU</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "main_sku" ? "bg-navy-950/20 text-navy-950 font-extrabold" : "bg-navy-800 text-slate-300"}`}>
-              {data.main_skus.length}
+            <span>SKU</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "main_sku" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
+              {availableMainSkus.length + (unknownGroup && (unknownGroup.sub_skus || []).length > 0 ? 1 : 0)}
             </span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("all_skus")}
-            className={`px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
+            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
               activeTab === "all_skus"
-                ? "bg-cyan-neon text-navy-950 shadow-md font-extrabold"
-                : "text-slate-300 hover:text-white"
+                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             }`}
           >
-            <span>📦 All SKUs</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "all_skus" ? "bg-navy-950/20 text-navy-950 font-extrabold" : "bg-navy-800 text-slate-300"}`}>
-              {data.all_skus.length}
+            <span>Variants</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "all_skus" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
+              {sortedSubSkus.length}
             </span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("courier")}
-            className={`px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
+            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
               activeTab === "courier"
-                ? "bg-cyan-neon text-navy-950 shadow-md font-extrabold"
-                : "text-slate-300 hover:text-white"
+                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
             }`}
           >
-            <span>🚚 Delivery Partner</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "courier" ? "bg-navy-950/20 text-navy-950 font-extrabold" : "bg-navy-800 text-slate-300"}`}>
+            <span>Courier</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "courier" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
               {data.courier_breakdown.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("platforms")}
+            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+              activeTab === "platforms"
+                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
+                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+            }`}
+          >
+            <span>Platform</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "platforms" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
+              {(data.marketplace_breakdown && data.marketplace_breakdown.length) || 1}
             </span>
           </button>
         </div>
       </div>
 
-      {/* 2. SINGLE UNIFIED ACTION BAR: Organize sequence + Filter status + ONLY 1 Apply button */}
-      <div className="mt-3 p-3 sm:p-3.5 rounded-xl bg-navy-950/95 border border-cyan-neon/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-md">
-        {/* Left: Sorting sequence dropdown */}
-        <div className="flex items-center space-x-2.5 flex-1">
-          <span className="p-1.5 rounded-lg bg-cyan-neon/15 text-cyan-neon text-sm flex-shrink-0">
-            🔀
-          </span>
-          <div className="flex-1 max-w-md">
-            <span className="text-[11px] font-bold text-slate-400 block mb-1">
-              Organize PDF Labels By:
-            </span>
-            <select
-              value={selectedSort}
-              onChange={(e) => setSelectedSort(e.target.value as SortOption)}
-              disabled={isReSorting}
-              className="w-full appearance-none bg-navy-900 border border-navy-600 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-neon cursor-pointer font-medium"
-            >
-              <option value="sku_courier">
-                🏷️ SKU + Delivery partner (Brown Valmo/Shadowfax, then Green)
-              </option>
-              <option value="courier_partner">
-                🚚 Delivery partner (All Valmo first, then Shadowfax, then Xpress Bees)
-              </option>
-              <option value="sku">📦 SKU (Group by Product SKU & variants)</option>
-              <option value="original_order">📄 Original order (Input PDF sequence)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Right: Exclusion Badge (if any) + EXACTLY ONE Primary Action Button */}
-        <div className="flex items-center space-x-2.5 self-end md:self-auto">
-          {totalExcludedItemsCount > 0 && (
-            <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-xs">
-              <span className="font-bold text-rose-300">
-                ✕ {totalExcludedItemsCount} Excluded
-              </span>
+      {/* 2. Compact Control Bar: Organize Dropdown + Single Update Action */}
+      <div className="p-3 bg-slate-50/70 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800/70 flex-shrink-0 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <label htmlFor="sort-select" className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center space-x-1">
+            <span>Organize PDF Labels:</span>
+          </label>
+          {(totalExcludedItemsCount > 0 || totalDetectedLabels > data.total_labels) && (
+            <div className="flex items-center space-x-1.5 text-[11px] text-rose-600 dark:text-rose-400 font-semibold bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded-lg border border-rose-200 dark:border-rose-500/25">
+              <span>✕ {totalExcludedItemsCount || (totalDetectedLabels - data.total_labels)} Excluded</span>
               <button
                 type="button"
                 onClick={handleResetAllExclusions}
-                disabled={isReSorting}
-                className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer ml-1"
-                title="Reset all crossed-out items"
+                className="underline hover:text-rose-700 dark:hover:text-white text-rose-600 dark:text-rose-300 ml-1 cursor-pointer font-bold"
+                title="Include all detected labels in the PDF"
               >
-                Reset
+                Include All ({totalDetectedLabels})
               </button>
             </div>
           )}
+        </div>
 
-          {/* THE SINGLE UNIFIED BUTTON */}
+        <div className="flex items-center space-x-2">
+          <select
+            id="sort-select"
+            value={selectedSort}
+            onChange={(e) => setSelectedSort(e.target.value as SortOption)}
+            disabled={isReSorting}
+            className="flex-1 min-w-0 appearance-none bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700/90 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-indigo-500 dark:focus:border-indigo-400 cursor-pointer font-medium"
+          >
+            <optgroup label="🏪 Platform / Marketplace First (Meesho, fir Flipkart, fir Snapdeal)">
+              <option value="marketplace">🏪 Platform First (All Meesho → Flipkart → Snapdeal)</option>
+              <option value="marketplace_sku_courier">🏷️ Platform + SKU + Delivery Partner</option>
+              <option value="marketplace_courier">🚚 Platform + Delivery Partner</option>
+            </optgroup>
+            <optgroup label="🚚 Delivery Partner Primary (Valmo, Shadowfax, Ekart...)">
+              <option value="courier_sku_marketplace">🚚 Delivery Partner + SKU + Platform</option>
+              <option value="courier_marketplace_sku">🚚 Delivery Partner + Platform + SKU</option>
+              <option value="courier_partner">🚚 Delivery Partner Only (All Valmo, then Shadowfax)</option>
+            </optgroup>
+            <optgroup label="📦 SKU / Product First">
+              <option value="sku_marketplace_courier">📦 SKU + Platform + Delivery Partner</option>
+              <option value="sku_courier_marketplace">🏷️ SKU + Delivery Partner + Platform</option>
+              <option value="sku_courier">🏷️ SKU + Delivery Partner (Standard)</option>
+              <option value="sku">📦 Product SKU Variants Only</option>
+            </optgroup>
+            <optgroup label="📄 Document Order">
+              <option value="original_order">📄 Original Order (Input Sequence)</option>
+            </optgroup>
+          </select>
+
           <button
             type="button"
             onClick={handleApplyClick}
             disabled={isReSorting || !hasChanges}
-            className={`px-5 py-2 rounded-xl text-xs font-extrabold transition-all shadow-md flex items-center space-x-1.5 whitespace-nowrap cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5 whitespace-nowrap cursor-pointer shrink-0 ${
               hasChanges
-                ? "bg-gradient-to-r from-cyan-neon to-purple-brand text-navy-950 hover:brightness-110 active:scale-95 shadow-glow"
-                : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-default"
+                ? "bg-gradient-to-r from-cyan-500 to-indigo-600 text-white hover:brightness-110 active:scale-95 shadow-md"
+                : "bg-slate-100 dark:bg-slate-800/60 text-slate-400 border border-slate-200 dark:border-slate-700/60 cursor-default"
             }`}
           >
             {isReSorting ? (
               <>
-                <div className="w-3.5 h-3.5 border-2 border-navy-950 border-t-transparent rounded-full animate-spin" />
-                <span>Updating PDF...</span>
+                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>Updating...</span>
               </>
             ) : hasChanges ? (
               <span>⚡ Update PDF</span>
             ) : (
-              <span>✓ Up to Date</span>
+              <span>✓ Synced</span>
             )}
           </button>
         </div>
       </div>
 
-      {/* ======================================================== */}
-      {/* TAB 1: MAIN SKU VIEW                                      */}
-      {/* ======================================================== */}
-      {activeTab === "main_sku" && (
-        <div className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-neon" />
-              <span>Main SKUs ({data.main_skus.length} Main Product Families)</span>
-            </span>
-          </div>
+      {/* 3. Main Body Content (Smoothly Scrollable Sidebar Area) */}
+      <div className="flex-1 overflow-y-auto p-3.5 space-y-3 custom-scrollbar">
+        {/* ======================================================== */}
+        {/* TAB 1: MAIN SKU VIEW                                      */}
+        {/* ======================================================== */}
+        {activeTab === "main_sku" && (
+          <div className="space-y-3">
+            {/* 1. Available (Saved) Catalog SKUs */}
+            {sortedAvailableMainSkus.length > 0 && (
+              <div className="space-y-2.5">
+                {sortedAvailableMainSkus.map((group) => {
+                  const isMainExcluded = excludedMainSkus.has(group.main_sku.toUpperCase());
+                  const colorStyle = getMainSkuColorStyle(group.main_sku, isMainExcluded);
+                  const isExpanded = !!expandedMainSkus[group.main_sku];
+                  const courierCounts = group.courier_counts || {};
+                  const excludedVariantsInGroup = (group.sub_skus || []).filter((s) => excludedSkus.has(s.sku.toUpperCase())).length;
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {data.main_skus.map((group) => {
-              const isMainExcluded = excludedMainSkus.has(group.main_sku.toUpperCase());
-              const colorStyle = getMainSkuColorStyle(group.main_sku, isMainExcluded);
-              const isExpanded = !!expandedMainSkus[group.main_sku];
-              const courierCounts = group.courier_counts || {};
-
-              return (
-                <div
-                  key={group.main_sku}
-                  className={`rounded-xl border ${colorStyle.border} p-4 transition-all shadow-md relative ${
-                    isMainExcluded ? "opacity-75" : ""
-                  }`}
-                >
-                  {/* Top: Main SKU Title, Badge, Total Count & Cross Button */}
-                  <div className="flex items-center justify-between pb-2.5 border-b border-navy-800 gap-2">
-                    <div className="flex items-center space-x-2.5">
-                      <span className={`w-3 h-3 rounded-full ${colorStyle.dot}`} />
-                      <span className={`text-base font-extrabold tracking-wide ${isMainExcluded ? "line-through text-slate-400" : "text-white"}`}>
-                        {group.main_sku}
-                      </span>
-                      {isMainExcluded && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
-                          ✕ Excluded
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                      <span className={`px-2.5 py-1 rounded-lg border text-xs font-mono font-extrabold ${colorStyle.badge}`}>
-                        {group.label_count} Labels
-                      </span>
-
-                      {/* Edit SKU button */}
-                      {onConfirmSku && (
-                        <button
-                          type="button"
-                          onClick={() => handleStartEditSku(group.main_sku)}
-                          disabled={isReSorting || isConfirmingSku}
-                          className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 border bg-navy-900/90 text-slate-300 hover:text-cyan-neon hover:bg-cyan-neon/10 border-navy-700 hover:border-cyan-neon/50 cursor-pointer disabled:opacity-50"
-                          title={`Edit & confirm SKU name for ${group.main_sku}`}
-                        >
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                          <span>Edit</span>
-                        </button>
-                      )}
-
-                      {/* Clean Cross (✕) Exclude button */}
-                      <button
-                        type="button"
-                        onClick={() => toggleExcludeMainSku(group.main_sku)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 border cursor-pointer ${
-                          isMainExcluded
-                            ? "bg-rose-500 text-white border-rose-400 shadow-sm hover:bg-rose-600"
-                            : "bg-navy-900/90 text-slate-300 hover:text-rose-300 hover:bg-rose-950/40 border-navy-700 hover:border-rose-500/50"
-                        }`}
-                        title={
-                          isMainExcluded
-                            ? `Click to re-include ${group.main_sku}`
-                            : `Click to cross out & exclude ${group.main_sku}`
-                        }
-                      >
-                        <span className="text-sm font-extrabold leading-none">✕</span>
-                        <span>{isMainExcluded ? "Excluded" : "Exclude"}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Inline Edit & Confirm Mode */}
-                  {editingMainSku === group.main_sku && (
-                    <div className="mt-3 p-3.5 rounded-xl bg-navy-950/95 border border-cyan-neon/40 shadow-glow space-y-3 animate-in fade-in duration-150">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-extrabold text-cyan-neon uppercase tracking-wider flex items-center space-x-1.5">
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                          <span>Edit & Confirm SKU</span>
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          Saves to database for future batches
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">
-                            SKU Name (Key) *
-                          </label>
-                          <input
-                            type="text"
-                            value={editSkuName}
-                            onChange={(e) => setEditSkuName(e.target.value)}
-                            placeholder="e.g. GREEN, BROWN"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-navy-900 border border-navy-700 text-white font-mono font-bold text-xs focus:outline-none focus:border-cyan-neon"
-                          />
-                          <p className="text-[9px] text-slate-400 mt-0.5">
-                            Display name on Picklist & PDF
-                          </p>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">
-                            Matching Keyword (Value) *
-                          </label>
-                          <input
-                            type="text"
-                            value={editKeyword}
-                            onChange={(e) => setEditKeyword(e.target.value)}
-                            placeholder="e.g. GREEN, RSPK"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-navy-900 border border-navy-700 text-cyan-neon font-mono font-bold text-xs focus:outline-none focus:border-cyan-neon"
-                          />
-                          <p className="text-[9px] text-slate-400 mt-0.5">
-                            Word matched on shipping labels
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Quick Chips from Sub-SKUs */}
-                      {group.sub_skus && group.sub_skus.length > 0 && (
-                        <div className="pt-1">
-                          <span className="text-[10px] text-slate-400 block mb-1 font-medium">
-                            Detected Sub-SKUs (click to use as keyword):
+                  return (
+                    <div
+                      key={group.main_sku}
+                      className={`rounded-xl border ${colorStyle.border} p-3 transition-all shadow-sm ${
+                        isMainExcluded ? "opacity-60" : ""
+                      }`}
+                    >
+                      {/* Top: Color Dot, Title, Label Count & Actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2 min-w-0 flex-1 flex-wrap">
+                          <span className={`w-2.5 h-2.5 rounded-full ${colorStyle.dot} shrink-0`} />
+                          <span
+                            className={`text-sm font-bold break-all leading-snug ${
+                              isMainExcluded ? "line-through text-slate-400" : "text-slate-900 dark:text-white"
+                            }`}
+                            title={group.main_sku}
+                          >
+                            {group.main_sku}
                           </span>
-                          <div className="flex flex-wrap gap-1">
-                            {group.sub_skus.slice(0, 5).map((sub) => (
-                              <button
-                                key={sub.sku}
-                                type="button"
-                                onClick={() => {
-                                  setEditKeyword(sub.sku);
-                                  if (!editSkuName || editSkuName === group.main_sku) {
-                                    setEditSkuName(group.main_sku);
-                                  }
-                                }}
-                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-navy-900 hover:bg-cyan-neon/20 border border-navy-700 hover:border-cyan-neon/50 text-slate-300 hover:text-cyan-neon transition-colors cursor-pointer"
+                          {/* Catalog status / Batch Only badge */}
+                          {!userSkusMap[group.main_sku.trim().toUpperCase()] && (
+                            <div className="flex items-center space-x-1 shrink-0">
+                              <span
+                                className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60"
+                                title="This SKU is local to this batch and not yet saved in your permanent SKU database."
                               >
-                                {sub.sku}
+                                Batch Only
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveSkuToCatalog(group.main_sku, group.sub_skus)}
+                                disabled={savingCatalogSku === group.main_sku.trim().toUpperCase()}
+                                className="text-[10px] font-bold text-cyan-600 dark:text-cyan-neon hover:underline cursor-pointer"
+                                title="Click to save this SKU to your permanent Personal SKU Database"
+                              >
+                                {savingCatalogSku === group.main_sku.trim().toUpperCase() ? "Saving..." : "＋ Save to Catalog"}
                               </button>
-                            ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          {excludedVariantsInGroup > 0 && !isMainExcluded && (
+                            <span className="text-[10px] text-amber-700 dark:text-amber-300 font-bold bg-amber-100 dark:bg-amber-500/15 border border-amber-300 dark:border-amber-500/30 px-1.5 py-0.5 rounded">
+                              {excludedVariantsInGroup} excluded
+                            </span>
+                          )}
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold ${colorStyle.badge}`}>
+                            {excludedVariantsInGroup > 0 && !isMainExcluded
+                              ? `${group.label_count - excludedVariantsInGroup} / ${group.label_count}`
+                              : group.label_count}
+                          </span>
+
+                          {/* Edit Button */}
+                          {onConfirmSku && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditSku(group.main_sku, group.sub_skus)}
+                              disabled={isReSorting || isConfirmingSku}
+                              className="p-1 rounded text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+                              title="Map multiple SKU values / rename"
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                              </svg>
+                            </button>
+                          )}
+
+                          {editSuccessSku === group.main_sku && (
+                            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-100 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-300 dark:border-emerald-500/30 animate-in fade-in">
+                              ✓ Applied!
+                            </span>
+                          )}
+
+                          {/* Exclude / Cross Button */}
+                          <button
+                            type="button"
+                            onClick={() => toggleExcludeMainSku(group.main_sku)}
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all border cursor-pointer ${
+                              isMainExcluded
+                                ? "bg-rose-500 text-white border-rose-400 hover:bg-rose-600"
+                                : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 border-slate-300 dark:border-slate-700"
+                            }`}
+                          >
+                            {isMainExcluded ? "Excluded" : "✕ Exclude"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Inline SKU Editor */}
+                      {editingMainSku === group.main_sku && (
+                        <div className="mt-2.5 p-3.5 rounded-xl bg-white dark:bg-slate-950 border border-cyan-400/50 dark:border-cyan-neon/40 shadow-xl space-y-3 animate-in fade-in">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="text-[10px] font-bold text-cyan-600 dark:text-cyan-neon uppercase tracking-wider block">
+                                Map Multiple Values / Rename SKU
+                              </span>
+                              {isLoadingSkuKeywords ? (
+                                <span className="text-[9px] text-slate-400 animate-pulse">Loading saved values...</span>
+                              ) : isCustomUserSku ? (
+                                <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-500/15 border border-emerald-300 dark:border-emerald-500/30 px-1.5 py-0.5 rounded">
+                                  ✓ Loaded from Your Catalog
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                                  Batch Detected
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[9px] text-slate-500 dark:text-slate-400">
+                              Separate multiple SKUs by comma
+                            </span>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                              Parent SKU Name:
+                            </label>
+                            <input
+                              type="text"
+                              value={editSkuName}
+                              onChange={(e) => setEditSkuName(e.target.value)}
+                              placeholder="Parent SKU Name (e.g. GREEN, BROWN)"
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-cyan-500 dark:focus:border-cyan-neon transition-colors"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] font-semibold text-slate-700 dark:text-slate-300">
+                                Matching Values / Multiple SKUs:
+                              </label>
+                              <span className="text-[9px] font-mono text-cyan-600 dark:text-cyan-300 font-bold">
+                                {editKeyword ? `${editKeyword.split(/[,;\n\r]+/).filter(Boolean).length} values` : "0 values"}
+                              </span>
+                            </div>
+                            <textarea
+                              rows={3}
+                              value={editKeyword}
+                              onChange={(e) => setEditKeyword(e.target.value)}
+                              placeholder="e.g. Rospack Brown 80ml 0139, Po10Brown, 074, BROWN"
+                              className="w-full px-2.5 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-cyan-700 dark:text-cyan-300 font-mono focus:outline-none focus:border-cyan-500 dark:focus:border-cyan-neon resize-none leading-relaxed"
+                            />
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                              Any shipping label containing any of these multiple values will group under <span className="text-cyan-600 dark:text-cyan-neon font-semibold">&quot;{editSkuName || "this SKU"}&quot;</span>.
+                            </p>
+                          </div>
+
+                          {inlineError && (
+                            <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 font-medium">
+                              ⚠️ {inlineError}
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-end space-x-2 pt-1 border-t border-slate-200 dark:border-slate-800/80">
+                            <button
+                              type="button"
+                              onClick={handleCancelEditSku}
+                              className="px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditSku(group.main_sku)}
+                              disabled={isConfirmingSku || !editSkuName.trim()}
+                              className="px-4 py-1.5 text-xs font-bold rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 dark:from-cyan-neon dark:to-cyan-400 text-white dark:text-navy-950 hover:opacity-95 shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                            >
+                              {isConfirmingSku ? "Saving & Applying..." : "Save Mapping"}
+                            </button>
                           </div>
                         </div>
                       )}
 
-                      {/* Success Badge */}
-                      {editSuccessSku === group.main_sku && (
-                        <div className="p-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center space-x-1.5">
-                          <svg className="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                          <span>SKU Confirmed! Saved to your database.</span>
+                      {/* Delivery Partners row */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                        {Object.entries(courierCounts).map(([cName, cnt]) => (
+                          <span
+                            key={cName}
+                            className="px-2 py-0.5 rounded bg-white/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 text-[11px] text-slate-700 dark:text-slate-300 flex items-center space-x-1"
+                          >
+                            <span className="text-slate-500 dark:text-slate-400">{formatCourierName(cName)}:</span>
+                            <span className="font-mono font-bold text-indigo-600 dark:text-indigo-300">{cnt}</span>
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Expand Sub-Variants Toggle */}
+                      {group.sub_skus && group.sub_skus.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-800/60 flex items-center justify-between text-[11px]">
+                          <span className="text-slate-500 dark:text-slate-400">
+                            {group.sub_skus.length} individual variant{group.sub_skus.length !== 1 ? "s" : ""}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandMainSku(group.main_sku)}
+                            className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium cursor-pointer"
+                          >
+                            {isExpanded ? "Hide Variants" : "View Variants ↓"}
+                          </button>
                         </div>
                       )}
 
-                      {/* Confirm & Cancel Buttons */}
-                      <div className="flex items-center justify-end space-x-2 pt-1 border-t border-navy-800">
+                      {/* Expanded Sub-Variants */}
+                      {isExpanded && group.sub_skus && (
+                        <div className="mt-2 space-y-1.5 pt-2 border-t border-slate-200 dark:border-slate-800/80 animate-in fade-in">
+                          {group.sub_skus.map((sub) => {
+                            const isSubExcluded = isMainExcluded || excludedSkus.has(sub.sku.toUpperCase());
+                            return (
+                              <div key={sub.sku} className="space-y-1">
+                                <div
+                                  className={`flex items-center justify-between p-2 rounded bg-white dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/70 text-xs ${
+                                    isSubExcluded ? "opacity-60" : ""
+                                  }`}
+                                >
+                                  <span className={`font-mono break-all leading-snug mr-2 ${isSubExcluded ? "line-through text-slate-400" : "text-slate-800 dark:text-slate-200"}`} title={sub.sku}>
+                                    {sub.sku}
+                                  </span>
+                                  <div className="flex items-center space-x-1.5 shrink-0">
+                                    <span className="font-mono text-[11px] text-indigo-600 dark:text-indigo-300 font-bold">
+                                      {sub.label_count}
+                                    </span>
+                                    {!isMainExcluded && (
+                                      <>
+                                        {onConfirmSku && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSplittingVariant(sub.sku);
+                                              setSplitTargetSku(sub.sku.toUpperCase());
+                                              setInlineError(null);
+                                            }}
+                                            className="px-1.5 py-0.5 rounded text-[10px] font-bold border border-cyan-300 dark:border-cyan-700/60 bg-cyan-50 dark:bg-cyan-950/40 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900 cursor-pointer"
+                                            title="Split this variant into a new SKU underneath"
+                                          >
+                                            ⇄ Split
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleExcludeSku(sub.sku)}
+                                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                            isSubExcluded
+                                              ? "bg-rose-500 text-white border-rose-400"
+                                              : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-rose-600 border-slate-200 dark:border-slate-700"
+                                          }`}
+                                        >
+                                          ✕
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Inline Split Prompt */}
+                                {splittingVariant === sub.sku && (
+                                  <div className="p-2.5 rounded-lg bg-indigo-50/90 dark:bg-slate-900 border border-indigo-300 dark:border-indigo-600 space-y-2 animate-in fade-in">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-indigo-900 dark:text-indigo-200">
+                                      <span>Split &quot;{sub.sku}&quot; to New SKU:</span>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                      <input
+                                        type="text"
+                                        value={splitTargetSku}
+                                        onChange={(e) => setSplitTargetSku(e.target.value)}
+                                        placeholder="New SKU Name"
+                                        className="flex-1 px-2.5 py-1 text-xs rounded bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-indigo-500"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleConfirmSplitVariant(group.main_sku, sub.sku)}
+                                        disabled={!splitTargetSku.trim() || isConfirmingSku}
+                                        className="px-3 py-1 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-700 text-white transition-colors cursor-pointer disabled:opacity-50"
+                                      >
+                                        {isConfirmingSku ? "Splitting..." : "✓ Confirm"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSplittingVariant(null);
+                                          setSplitTargetSku("");
+                                        }}
+                                        className="px-2.5 py-1 text-xs rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 cursor-pointer"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 2. UNKNOWN SKUs Card Section (Dedicated Amber Card for Unrecognized Variants) */}
+            {unknownGroup && (unknownGroup.sub_skus || []).length > 0 && (
+              <div className="rounded-xl border-2 border-amber-400 dark:border-amber-500/70 bg-gradient-to-br from-amber-50/90 to-orange-50/50 dark:from-amber-950/30 dark:to-slate-900/80 p-3.5 transition-all shadow-md space-y-3">
+                {/* Header */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5 pb-0.5">
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                    <span className="text-sm font-extrabold text-amber-900 dark:text-amber-200 uppercase tracking-wide whitespace-nowrap">
+                      ⚠️ UNKNOWN SKUs
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-200/90 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 whitespace-nowrap shrink-0">
+                      {unknownGroup.label_count} Label{unknownGroup.label_count !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    {/* Smart Sort Toggle Button */}
+                    <div className="flex items-center space-x-1.5 bg-white/95 dark:bg-slate-900/95 border border-amber-300 dark:border-amber-700/80 rounded-lg px-2.5 py-1 shadow-sm whitespace-nowrap shrink-0">
+                      <span className="text-[10px] font-bold text-amber-950 dark:text-amber-200 whitespace-nowrap">
+                        ⚡ Smart Sort:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSmartSort((prev) => !prev)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                          smartSort
+                            ? "bg-emerald-600 text-white shadow-sm"
+                            : "bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                        }`}
+                        title="Letter-wise & Number-wise Natural Collation (A-Z, 0-9)"
+                      >
+                        {smartSort ? "ON (A-Z / 0-9)" : "OFF"}
+                      </button>
+                    </div>
+
+                    {/* Top-Level Add SKU / Common Keyword Matcher Action */}
+                    {onConfirmSku && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsBulkAddOpen((prev) => !prev);
+                          setInlineError(null);
+                          if (!bulkSelectedExistingSku && allKnownCodes.length > 0) {
+                            setBulkSelectedExistingSku(allKnownCodes[0]);
+                          }
+                        }}
+                        className={`px-3 py-1 text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                          isBulkAddOpen
+                            ? "bg-amber-600 dark:bg-amber-500 text-white"
+                            : "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white active:scale-95"
+                        }`}
+                      >
+                        <span>{isBulkAddOpen ? "✕ Close" : "＋ Add SKU"}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Top-Level Add SKU / Common Word Panel */}
+                {isBulkAddOpen && (
+                  <div className="p-3.5 rounded-xl bg-white dark:bg-slate-950 border-2 border-amber-400 dark:border-amber-500/80 shadow-lg space-y-3 animate-in fade-in">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-amber-950 dark:text-amber-200 uppercase tracking-wide flex items-center space-x-1.5">
+                          <span>⚡ Common Word / SKU Matcher</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                          Bulk Auto-Filter
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                        In sab Unknown SKUs me jo common word hai use dalein (jaise <span className="font-mono font-bold text-amber-600 dark:text-amber-400">&quot;brown&quot;</span> ya <span className="font-mono font-bold text-amber-600 dark:text-amber-400">&quot;rspk&quot;</span>). Wo sabhi labels auto-filter ho jayenge:
+                      </p>
+                    </div>
+
+                    {/* 2 Choice Options */}
+                    <div className="grid grid-cols-2 p-1 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 gap-1 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkAddMode("existing");
+                          setInlineError(null);
+                        }}
+                        className={`py-1.5 px-2 rounded-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                          bulkAddMode === "existing"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                        }`}
+                      >
+                        <span>📁 1. Existing SKU me Add</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkAddMode("new");
+                          setInlineError(null);
+                        }}
+                        className={`py-1.5 px-2 rounded-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                          bulkAddMode === "new"
+                            ? "bg-cyan-600 text-white shadow-sm"
+                            : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                        }`}
+                      >
+                        <span>✨ 2. New SKU Banayein</span>
+                      </button>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      {bulkAddMode === "existing" ? (
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                            Target Existing SKU Chunein:
+                          </label>
+                          {allKnownCodes.length > 0 ? (
+                            <select
+                              value={bulkSelectedExistingSku || allKnownCodes[0]}
+                              onChange={(e) => setBulkSelectedExistingSku(e.target.value)}
+                              disabled={isConfirmingSku}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-indigo-500"
+                            >
+                              {allKnownCodes.map((code) => (
+                                <option key={code} value={code}>
+                                  {code} {userSkusMap[code]?.product_name ? `(${userSkusMap[code].product_name})` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="text-xs text-amber-700 dark:text-amber-400 italic">
+                              Koi existing catalog SKU nahi mila. Kripya &quot;New SKU Banayein&quot; option choose karein.
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                            Naya SKU Name (Parent SKU):
+                          </label>
+                          <input
+                            type="text"
+                            value={bulkNewSkuName}
+                            onChange={(e) => setBulkNewSkuName(e.target.value)}
+                            placeholder="e.g. BROWN ya ROSPACK-BROWN"
+                            disabled={isConfirmingSku}
+                            className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-cyan-500 uppercase"
+                          />
+                        </div>
+                      )}
+
+                      {/* Common Word Input */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                            Common Word / Matching Keyword:
+                          </label>
+                          <span className="text-[10px] text-slate-400">
+                            (jaise &quot;brown&quot;, &quot;rspk&quot;)
+                          </span>
+                        </div>
+                        <input
+                          type="text"
+                          value={bulkCommonKeyword}
+                          onChange={(e) => setBulkCommonKeyword(e.target.value)}
+                          placeholder="e.g. brown (In SKUs me se common word type karein)"
+                          disabled={isConfirmingSku}
+                          className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-slate-50 dark:bg-slate-900 border border-amber-300 dark:border-amber-700/80 text-amber-900 dark:text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500"
+                        />
+
+                        {/* Suggested Words */}
+                        {suggestedWords.length > 0 && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Quick suggestions:</span>
+                            {suggestedWords.map((word) => (
+                              <button
+                                key={word}
+                                type="button"
+                                onClick={() => setBulkCommonKeyword(word)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer border ${
+                                  bulkCommonKeyword.toLowerCase() === word.toLowerCase()
+                                    ? "bg-amber-500 text-white border-amber-600"
+                                    : "bg-slate-100 dark:bg-slate-900 hover:bg-amber-100 dark:hover:bg-amber-950/60 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+                                }`}
+                                title={`Click to use '${word}'`}
+                              >
+                                + {word}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Live Matching Preview */}
+                      {bulkCommonKeyword.trim() && (
+                        <div className="p-2.5 rounded-lg bg-slate-100/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1.5">
+                          {matchingVariants.length > 0 ? (
+                            <>
+                              <div className="text-emerald-700 dark:text-emerald-400 font-bold flex items-center space-x-1">
+                                <span>✓</span>
+                                <span>
+                                  {matchingVariants.length} variant{matchingVariants.length > 1 ? "s" : ""} ({matchingLabelsCount} labels) match &quot;{bulkCommonKeyword.trim()}&quot; and will move under <span className="underline uppercase">{bulkAddMode === "existing" ? (bulkSelectedExistingSku || allKnownCodes[0]) : (bulkNewSkuName.trim() || "NEW SKU")}</span>
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {matchingVariants.map((v) => (
+                                  <span key={v.sku} className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                                    {v.sku} ({v.label_count})
+                                  </span>
+                                ))}
+                              </div>
+                              {remainingVariantsCount > 0 && (
+                                <div className="text-slate-500 dark:text-slate-400 text-[10px]">
+                                  Baki Unknown me rah jayenge: {remainingVariantsCount} variant{remainingVariantsCount > 1 ? "s" : ""}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="text-amber-700 dark:text-amber-400 text-[10px]">
+                              ℹ️ Current Unknown SKUs me &quot;{bulkCommonKeyword.trim()}&quot; se koi variant match nahi hua.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {inlineError && (
+                        <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 font-medium">
+                          ⚠️ {inlineError}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end space-x-2 pt-1 border-t border-slate-200 dark:border-slate-800">
                         <button
                           type="button"
-                          onClick={handleCancelEditSku}
+                          onClick={() => {
+                            setIsBulkAddOpen(false);
+                            setInlineError(null);
+                          }}
                           disabled={isConfirmingSku}
-                          className="px-3 py-1 rounded-lg bg-navy-800 hover:bg-navy-700 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                          className="px-3 py-1.5 text-xs rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
                         >
                           Cancel
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleSaveEditSku(group.main_sku)}
-                          disabled={isConfirmingSku || !editSkuName.trim()}
-                          className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-cyan-neon to-purple-brand text-navy-950 font-extrabold text-xs shadow-glow hover:brightness-110 active:scale-95 transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                          onClick={handleBulkAddSku}
+                          disabled={
+                            isConfirmingSku ||
+                            !bulkCommonKeyword.trim() ||
+                            (bulkAddMode === "new" && !bulkNewSkuName.trim()) ||
+                            (bulkAddMode === "existing" && allKnownCodes.length === 0)
+                          }
+                          className="px-4 py-1.5 text-xs font-bold rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50"
                         >
-                          {isConfirmingSku ? (
-                            <>
-                              <div className="w-3 h-3 border-2 border-navy-950 border-t-transparent rounded-full animate-spin" />
-                              <span>Confirming...</span>
-                            </>
-                          ) : (
-                            <>
-                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                              <span>Confirm SKU</span>
-                            </>
-                          )}
+                          {isConfirmingSku ? "Applying & Filtering..." : "✓ Apply & Re-filter Batch"}
                         </button>
                       </div>
                     </div>
-                  )}
-
-                  {/* Notice when excluded */}
-                  {isMainExcluded && (
-                    <div className="mt-2.5 py-1.5 px-3 rounded-lg bg-rose-950/90 border border-rose-500/50 flex items-center justify-between text-xs text-rose-200">
-                      <span>✕ {group.label_count} {group.main_sku} labels excluded</span>
-                      <button
-                        type="button"
-                        onClick={() => toggleExcludeMainSku(group.main_sku)}
-                        className="underline hover:text-white font-bold ml-2 cursor-pointer"
-                      >
-                        Restore
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Middle: Delivery Partner Breakdown for this Main SKU */}
-                  <div className="pt-3 pb-2">
-                    <div className="text-[11px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
-                      <span>Delivery Partners for {group.main_sku}:</span>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1.5">
-                      {Object.keys(courierCounts).length > 0 ? (
-                        Object.entries(courierCounts)
-                          .sort((a, b) => b[1] - a[1])
-                          .map(([cName, cnt]) => (
-                            <span
-                              key={cName}
-                              className="px-2.5 py-1 rounded-lg bg-navy-900 border border-navy-700 text-xs flex items-center space-x-1.5 text-slate-200"
-                            >
-                              <span className="text-slate-400">{formatCourierName(cName)}:</span>
-                              <span className="font-mono font-bold text-cyan-neon">{cnt}</span>
-                            </span>
-                          ))
-                      ) : (
-                        <span className="text-xs text-slate-400">Standard Couriers</span>
-                      )}
-                    </div>
                   </div>
+                )}
 
-                  {/* Bottom: Sub-SKU Variants Expander Toggle */}
-                  <div className="pt-2 border-t border-navy-800/80 flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">
-                      {group.sub_skus.length} individual SKU variant{group.sub_skus.length === 1 ? "" : "s"}
-                    </span>
+                {/* Pending SKU Changes: 1-Click PDF & Database Re-render Banner */}
+                {pendingResolutions.length > 0 && (
+                  <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/15 via-teal-500/15 to-indigo-500/15 border-2 border-emerald-500/60 dark:border-emerald-500/40 shadow-lg flex items-center justify-between gap-3 flex-wrap animate-in fade-in">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <div>
+                        <span className="text-xs font-black text-emerald-950 dark:text-emerald-200 uppercase tracking-wide block">
+                          ⚡ {pendingResolutions.length} SKU Update{pendingResolutions.length > 1 ? "s" : ""} Saved in Database!
+                        </span>
+                        <span className="text-[10px] text-slate-600 dark:text-slate-300">
+                          SKUs have been updated locally &amp; in database. Click to re-compile PDF with new sorting.
+                        </span>
+                      </div>
+                    </div>
 
                     <button
                       type="button"
-                      onClick={() => toggleExpandMainSku(group.main_sku)}
-                      className="text-xs font-semibold text-cyan-neon hover:underline flex items-center space-x-1 focus:outline-none cursor-pointer"
+                      onClick={handleApplyClick}
+                      disabled={isReSorting}
+                      className="px-4 py-2 rounded-lg text-xs font-black bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white shadow-lg shadow-emerald-500/25 active:scale-95 transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
                     >
-                      <span>{isExpanded ? "Hide Variants" : "View Variants"}</span>
-                      <svg
-                        className={`w-3.5 h-3.5 transform transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
+                      {isReSorting ? (
+                        <>
+                          <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Updating PDF...</span>
+                        </>
+                      ) : (
+                        <span>⚡ Update PDF Now</span>
+                      )}
                     </button>
                   </div>
+                )}
 
-                  {/* Expanded Sub-SKUs list under this Main SKU */}
-                  {isExpanded && (
-                    <div className="mt-3 pt-3 border-t border-navy-800/80 space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                      {group.sub_skus.map((sub, sIdx) => {
-                        const isSubExcluded =
-                          isMainExcluded || excludedSkus.has(sub.sku.toUpperCase());
-                        return (
-                          <div
-                            key={sub.sku}
-                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs transition-colors ${
-                              isSubExcluded
-                                ? "bg-rose-950/30 border-rose-800/40 opacity-70"
-                                : "bg-navy-900/90 border-navy-800"
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2">
-                              <span className="text-[10px] font-mono text-slate-500 w-4">
-                                {sIdx + 1}.
-                              </span>
-                              <span className={`font-mono font-bold ${isSubExcluded ? "line-through text-slate-400" : "text-white"}`}>
-                                {sub.sku}
-                              </span>
-                            </div>
+                <p className="text-[11px] text-amber-800 dark:text-amber-300/90 leading-snug">
+                  These variants are not recognized in your catalog. Add to an existing SKU or create a new SKU in 1 click:
+                </p>
 
-                            <div className="flex items-center space-x-2">
-                              <span className="font-mono text-cyan-neon font-semibold">
-                                {sub.label_count} label{sub.label_count === 1 ? "" : "s"}
-                              </span>
-                              {!isMainExcluded && (
+                {/* List of unmapped variants */}
+                <div className="space-y-2">
+                  {sortedUnknownSubSkus.map((sub) => {
+                    const isSubExcluded = excludedSkus.has(sub.sku.toUpperCase());
+                    const isAssigningThis = assigningVariant === sub.sku;
+
+                    return (
+                      <div
+                        key={sub.sku}
+                        className={`p-2.5 rounded-lg bg-white/95 dark:bg-slate-950/90 border border-amber-200 dark:border-amber-800/60 shadow-sm space-y-2 ${
+                          isSubExcluded ? "opacity-60" : ""
+                        }`}
+                      >
+                        {/* Variant Row: Title, Count, Action Buttons */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <span
+                              className={`text-xs font-mono font-bold block break-all leading-snug ${
+                                isSubExcluded ? "line-through text-slate-400" : "text-slate-900 dark:text-slate-100"
+                              }`}
+                              title={sub.sku}
+                            >
+                              {sub.sku}
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                              Detected in {sub.label_count} shipping label{sub.label_count !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center space-x-1.5 shrink-0">
+                            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-700 whitespace-nowrap shrink-0">
+                              {sub.label_count}
+                            </span>
+
+                            {onConfirmSku && (
+                              <>
                                 <button
                                   type="button"
-                                  onClick={() => toggleExcludeSku(sub.sku)}
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
-                                    isSubExcluded
-                                      ? "bg-rose-500 text-white border-rose-400"
-                                      : "bg-navy-800 text-slate-400 hover:text-rose-300 border-navy-700"
-                                  }`}
-                                  title={isSubExcluded ? "Re-include SKU" : "Exclude SKU"}
+                                  onClick={() => {
+                                    if (isAssigningThis && assignMode === "existing") {
+                                      setAssigningVariant(null);
+                                      setAssignMode(null);
+                                    } else {
+                                      setAssigningVariant(sub.sku);
+                                      setAssignMode("existing");
+                                      setSelectedExistingSku(allKnownCodes[0] || "");
+                                      setInlineError(null);
+                                    }
+                                  }}
+                                  disabled={isConfirmingSku}
+                                  className="px-2 py-1 text-[11px] font-bold rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                                  title="Add this variant to an existing saved SKU"
                                 >
-                                  ✕
+                                  ＋ Add to Existing ▾
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isAssigningThis && assignMode === "new") {
+                                      setAssigningVariant(null);
+                                      setAssignMode(null);
+                                    } else {
+                                      setAssigningVariant(sub.sku);
+                                      setAssignMode("new");
+                                      setNewSkuInput(sub.sku.toUpperCase());
+                                      setInlineError(null);
+                                    }
+                                  }}
+                                  disabled={isConfirmingSku}
+                                  className="px-2 py-1 text-[11px] font-bold rounded bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/60 border border-cyan-200 dark:border-cyan-800/60 transition-all cursor-pointer whitespace-nowrap shrink-0"
+                                  title="Create a new SKU in catalog and assign this variant"
+                                >
+                                  ＋ New SKU
+                                </button>
+                              </>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => toggleExcludeSku(sub.sku)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border whitespace-nowrap shrink-0 ${
+                                isSubExcluded
+                                  ? "bg-rose-500 text-white border-rose-400"
+                                  : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-rose-600 border-slate-200 dark:border-slate-700"
+                              }`}
+                              title={isSubExcluded ? "Include variant" : "Exclude variant"}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Mode A: Assign to Existing SKU inline form */}
+                        {isAssigningThis && assignMode === "existing" && (
+                          <div className="p-2.5 rounded-lg bg-indigo-50/90 dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700/80 space-y-2 animate-in fade-in">
+                            <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200 block">
+                              Select Available SKU to merge &quot;{sub.sku}&quot; into:
+                            </span>
+                            <div className="flex items-center space-x-2">
+                              {allKnownCodes.length > 0 ? (
+                                <select
+                                  value={selectedExistingSku || allKnownCodes[0]}
+                                  onChange={(e) => setSelectedExistingSku(e.target.value)}
+                                  disabled={isConfirmingSku}
+                                  className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-indigo-500"
+                                >
+                                  {allKnownCodes.map((code) => (
+                                    <option key={code} value={code}>
+                                      {code} {userSkusMap[code]?.product_name ? `(${userSkusMap[code].product_name})` : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-xs text-rose-600 dark:text-rose-400 italic flex-1">
+                                  No saved SKUs found. Use &quot;＋ New SKU&quot; instead.
+                                </span>
+                              )}
+
+                              {allKnownCodes.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignVariantToExisting(sub.sku, selectedExistingSku || allKnownCodes[0])}
+                                  disabled={isConfirmingSku}
+                                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-all cursor-pointer disabled:opacity-50"
+                                >
+                                  {isConfirmingSku ? "Assigning..." : "✓ Assign"}
                                 </button>
                               )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAssigningVariant(null);
+                                  setAssignMode(null);
+                                  setInlineError(null);
+                                }}
+                                className="px-2.5 py-1.5 text-xs rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
                             </div>
+
+                            {inlineError && assigningVariant === sub.sku && (
+                              <div className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                                ⚠️ {inlineError}
+                              </div>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                        )}
+
+                        {/* Mode B: Create New SKU inline form */}
+                        {isAssigningThis && assignMode === "new" && (
+                          <div className="p-2.5 rounded-lg bg-cyan-50/90 dark:bg-slate-900 border border-cyan-300 dark:border-cyan-700/80 space-y-2 animate-in fade-in">
+                            <span className="text-[11px] font-bold text-cyan-900 dark:text-cyan-200 block">
+                              Create New SKU Name for &quot;{sub.sku}&quot;:
+                            </span>
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="text"
+                                value={newSkuInput}
+                                onChange={(e) => setNewSkuInput(e.target.value)}
+                                placeholder="New SKU Name (e.g. ROSPACK 80ML)"
+                                disabled={isConfirmingSku}
+                                className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-cyan-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleCreateAndAssignNewSku(sub.sku, newSkuInput)}
+                                disabled={!newSkuInput.trim() || isConfirmingSku}
+                                className="px-3 py-1.5 text-xs font-bold rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                              >
+                                {isConfirmingSku ? "Creating..." : "✓ Create & Assign"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAssigningVariant(null);
+                                  setAssignMode(null);
+                                  setInlineError(null);
+                                }}
+                                className="px-2.5 py-1.5 text-xs rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+
+                            {inlineError && assigningVariant === sub.sku && (
+                              <div className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                                ⚠️ {inlineError}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ======================================================== */}
-      {/* TAB 2: ALL SUB-SKUS VIEW                                  */}
-      {/* ======================================================== */}
-      {activeTab === "all_skus" && (
-        <div className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-neon" />
-              <span>SKU Variants ({data.all_skus.length} Items)</span>
-            </span>
-          </div>
-
-          {/* Main SKU Filter Pills */}
-          {data.main_skus.length > 0 && (
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 flex items-center justify-between">
-                <span>Filter by Main SKU:</span>
-                {selectedMainSkuFilter && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedMainSkuFilter(null)}
-                    className="text-[10px] text-cyan-neon hover:underline cursor-pointer"
-                  >
-                    Reset Filter (Show All)
-                  </button>
-                )}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedMainSkuFilter(null)}
-                  className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                    selectedMainSkuFilter === null
-                      ? "bg-purple-brand text-white border-purple-brand shadow-sm font-bold"
-                      : "bg-navy-900/60 border-navy-700 text-slate-300 hover:border-slate-500"
-                  }`}
-                >
-                  All SKUs ({data.total_labels})
-                </button>
-                {data.main_skus.map((group) => {
-                  const isSel = selectedMainSkuFilter === group.main_sku;
-                  return (
-                    <button
-                      type="button"
-                      key={group.main_sku}
-                      onClick={() => setSelectedMainSkuFilter(isSel ? null : group.main_sku)}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer ${
-                        isSel
-                          ? "bg-cyan-neon text-navy-950 border-cyan-neon shadow-sm"
-                          : "bg-navy-900/60 border-navy-700 text-slate-200 hover:border-cyan-neon/40"
-                      }`}
-                    >
-                      <span>{group.main_sku}</span>
-                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isSel ? "bg-navy-950/20 text-navy-950" : "bg-white/10 text-cyan-neon"}`}>
-                        {group.label_count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Subheader with "SKU Order" and Sorting Controls */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-navy-700/60 gap-2">
-            <div className="text-xs font-extrabold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-neon" />
-              <span>SKU Order ({sortedSubSkus.length} Separate SKUs)</span>
-            </div>
-
-            {/* Sort Controls (SKU Name A-Z vs No. of Labels) */}
-            <div className="flex items-center space-x-2 self-start sm:self-auto">
-              <span className="text-[11px] text-slate-400">Sort by:</span>
-              <div className="inline-flex rounded-lg border border-navy-700 p-0.5 bg-navy-950 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSortBy("name");
-                    setSortAsc(true);
-                  }}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    sortBy === "name"
-                      ? "bg-navy-700 text-cyan-neon font-bold"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                  title="Alphabetical letter-wise sorting (A to Z)"
-                >
-                  SKU Name (A-Z)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSortBy("count");
-                    setSortAsc(false);
-                  }}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                    sortBy === "count"
-                      ? "bg-navy-700 text-cyan-neon font-bold"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                  title="Sort by label volume"
-                >
-                  No. of Labels
-                </button>
-              </div>
-
-              {/* Ascending / Descending Direction Toggle */}
+        {/* ======================================================== */}
+        {/* TAB 2: ALL SKU VARIANTS                                    */}
+        {/* ======================================================== */}
+        {activeTab === "all_skus" && (
+          <div className="space-y-2.5">
+            {/* Search & Sort Controls */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={skuSearchQuery}
+                onChange={(e) => setSkuSearchQuery(e.target.value)}
+                placeholder="Search variant..."
+                className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-200 focus:outline-none focus:border-indigo-500 dark:focus:border-indigo-400 placeholder:text-slate-400 dark:placeholder:text-slate-500"
+              />
               <button
                 type="button"
-                onClick={() => setSortAsc(!sortAsc)}
-                className="p-1 rounded-md border border-navy-700 bg-navy-950 text-slate-300 hover:text-cyan-neon transition-colors cursor-pointer"
-                title={sortAsc ? "Ascending order" : "Descending order"}
+                onClick={() => setSortBy(sortBy === "name" ? "count" : "name")}
+                className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 hover:text-slate-950 dark:hover:text-white"
+                title="Toggle sort by name or volume"
               >
-                <svg
-                  className={`w-4 h-4 transform transition-transform ${sortAsc ? "" : "rotate-180"}`}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M12 19V5M5 12l7-7 7 7" />
-                </svg>
+                {sortBy === "name" ? "A-Z" : "Count"}
               </button>
             </div>
-          </div>
 
-          {/* List of SKU Cards with Clean Cross (✕) Exclude button */}
-          <div className="max-h-72 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
-            {sortedSubSkus.map((item, index) => {
-              const isParentExcluded = excludedMainSkus.has(item.main_sku.toUpperCase());
-              const isDirectExcluded = excludedSkus.has(item.sku.toUpperCase());
-              const isSkuExcluded = isParentExcluded || isDirectExcluded;
+            {/* List */}
+            <div className="space-y-1.5">
+              {sortedSubSkus.map((item, idx) => {
+                const isParentExcluded = excludedMainSkus.has(item.main_sku.toUpperCase());
+                const isDirectExcluded = excludedSkus.has(item.sku.toUpperCase());
+                const isSkuExcluded = isParentExcluded || isDirectExcluded;
+                const isUnknown = item.main_sku.toUpperCase() === "UNKNOWN" || item.main_sku.toUpperCase() === "UNKNOWN SKUS";
+                const isAssigningThis = assigningVariant === item.sku;
 
-              return (
-                <div
-                  key={item.sku}
-                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-colors ${
-                    isSkuExcluded
-                      ? "bg-rose-950/25 border-rose-800/40 opacity-70"
-                      : "bg-navy-950/70 border-navy-700/80 hover:border-cyan-neon/40"
-                  }`}
-                >
-                  {/* Left: Rank Number + SKU Name */}
-                  <div className="flex items-center space-x-3">
-                    <span className="w-6 h-6 rounded-md bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-mono font-bold text-slate-300">
-                      {index + 1}
-                    </span>
-                    <div>
-                      <span className={`font-mono text-sm font-bold tracking-wide ${isSkuExcluded ? "line-through text-slate-400" : "text-white"}`}>
-                        {item.sku}
-                      </span>
-                      <span className="ml-2 text-[10px] px-1.5 py-0.2 rounded bg-purple-brand/20 border border-purple-brand/30 text-purple-300 font-semibold">
-                        {item.main_sku}
-                      </span>
-                      {isSkuExcluded && (
-                        <span className="ml-2 text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
-                          ✕ {isParentExcluded ? `Excluded (${item.main_sku})` : "Excluded"}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right: Quantity / Labels count + Couriers + Cross Button */}
-                  <div className="flex items-center space-x-2.5">
-                    <div className="flex flex-wrap gap-1 max-w-[150px] justify-end hidden sm:flex">
-                      {item.courier_partners.map((cp) => (
-                        <span key={cp} className="text-[10px] px-1.5 py-0.5 rounded bg-navy-800 text-slate-400 border border-navy-700">
-                          {formatCourierName(cp)}
-                        </span>
-                      ))}
-                    </div>
-
-                    <span className="px-2.5 py-1 rounded-lg bg-navy-800/90 border border-navy-600 text-xs font-mono font-bold text-cyan-neon whitespace-nowrap">
-                      {item.label_count} label{item.label_count === 1 ? "" : "s"}
-                    </span>
-
-                    {/* Cross (✕) Exclude button */}
-                    <button
-                      type="button"
-                      onClick={() => toggleExcludeSku(item.sku)}
-                      disabled={isParentExcluded}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 border cursor-pointer ${
-                        isDirectExcluded
-                          ? "bg-rose-500 text-white border-rose-400 shadow-sm"
-                          : isParentExcluded
-                          ? "bg-navy-950 text-slate-500 border-navy-800 cursor-not-allowed"
-                          : "bg-navy-900 text-slate-300 hover:text-rose-300 hover:bg-rose-950/40 border-navy-700 hover:border-rose-500/40"
+                return (
+                  <div key={item.sku} className="space-y-1.5">
+                    <div
+                      className={`flex items-center justify-between p-2.5 rounded-lg border ${
+                        isUnknown
+                          ? "border-amber-300 dark:border-amber-700/80 bg-amber-50/70 dark:bg-amber-950/20"
+                          : "border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60"
+                      } hover:bg-slate-100/80 dark:hover:bg-slate-900 transition-colors text-xs ${
+                        isSkuExcluded ? "opacity-60" : ""
                       }`}
-                      title={
-                        isParentExcluded
-                          ? `Already excluded because parent (${item.main_sku}) is crossed out`
-                          : isDirectExcluded
-                          ? `Click to re-include ${item.sku}`
-                          : `Click to cross out & exclude ${item.sku}`
-                      }
                     >
-                      <span className="font-extrabold leading-none">✕</span>
-                      <span className="text-[11px] hidden sm:inline">{isDirectExcluded ? "Excluded" : "Exclude"}</span>
-                    </button>
+                      <div className="min-w-0 flex-1 mr-2">
+                        <div className="flex items-center space-x-1.5 flex-wrap">
+                          <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500">#{idx + 1}</span>
+                          <span className={`font-mono font-semibold break-all leading-snug ${isSkuExcluded ? "line-through text-slate-400" : "text-slate-900 dark:text-white"}`}>
+                            {item.sku}
+                          </span>
+                          {isUnknown && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded font-bold bg-amber-200 dark:bg-amber-900/70 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                              ⚠️ UNKNOWN
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                          Group: {item.main_sku}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-300">
+                          {item.label_count}
+                        </span>
+
+                        {isUnknown && onConfirmSku && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isAssigningThis && assignMode === "existing") {
+                                  setAssigningVariant(null);
+                                  setAssignMode(null);
+                                } else {
+                                  setAssigningVariant(item.sku);
+                                  setAssignMode("existing");
+                                  setSelectedExistingSku(allKnownCodes[0] || "");
+                                  setInlineError(null);
+                                }
+                              }}
+                              disabled={isConfirmingSku}
+                              className="px-2 py-0.5 text-[10px] font-bold rounded bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 transition-all cursor-pointer"
+                              title="Add this variant to an existing saved SKU"
+                            >
+                              ＋ Add ▾
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isAssigningThis && assignMode === "new") {
+                                  setAssigningVariant(null);
+                                  setAssignMode(null);
+                                } else {
+                                  setAssigningVariant(item.sku);
+                                  setAssignMode("new");
+                                  setNewSkuInput(item.sku.toUpperCase());
+                                  setInlineError(null);
+                                }
+                              }}
+                              disabled={isConfirmingSku}
+                              className="px-2 py-0.5 text-[10px] font-bold rounded bg-cyan-50 dark:bg-cyan-950/50 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/60 border border-cyan-200 dark:border-cyan-800/60 transition-all cursor-pointer"
+                              title="Create a new SKU in catalog and assign this variant"
+                            >
+                              ＋ New
+                            </button>
+                          </>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => toggleExcludeSku(item.sku)}
+                          disabled={isParentExcluded}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            isDirectExcluded
+                              ? "bg-rose-500 text-white border-rose-400"
+                              : isParentExcluded
+                              ? "bg-slate-100 dark:bg-slate-950 text-slate-400 dark:text-slate-600 border-slate-200 dark:border-slate-800 cursor-not-allowed"
+                              : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-300 border-slate-300 dark:border-slate-700"
+                          }`}
+                        >
+                          {isDirectExcluded ? "Excluded" : "✕"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mode A: Assign to Existing inline form in Tab 2 */}
+                    {isAssigningThis && assignMode === "existing" && (
+                      <div className="p-2.5 rounded-lg bg-indigo-50/90 dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700/80 space-y-2 animate-in fade-in">
+                        <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200 block">
+                          Merge &quot;{item.sku}&quot; into Available SKU:
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          {allKnownCodes.length > 0 ? (
+                            <select
+                              value={selectedExistingSku || allKnownCodes[0]}
+                              onChange={(e) => setSelectedExistingSku(e.target.value)}
+                              disabled={isConfirmingSku}
+                              className="flex-1 px-2.5 py-1 text-xs rounded bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-indigo-500"
+                            >
+                              {allKnownCodes.map((code) => (
+                                <option key={code} value={code}>
+                                  {code}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-xs text-rose-600 dark:text-rose-400 italic flex-1">
+                              No saved SKUs found. Use &quot;＋ New&quot; instead.
+                            </span>
+                          )}
+
+                          {allKnownCodes.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleAssignVariantToExisting(item.sku, selectedExistingSku || allKnownCodes[0])}
+                              disabled={isConfirmingSku}
+                              className="px-3 py-1 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-700 text-white transition-all cursor-pointer disabled:opacity-50"
+                            >
+                              {isConfirmingSku ? "..." : "✓ Assign"}
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssigningVariant(null);
+                              setAssignMode(null);
+                              setInlineError(null);
+                            }}
+                            className="px-2.5 py-1 text-xs rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        {inlineError && assigningVariant === item.sku && (
+                          <div className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                            ⚠️ {inlineError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Mode B: Create New SKU inline form in Tab 2 */}
+                    {isAssigningThis && assignMode === "new" && (
+                      <div className="p-2.5 rounded-lg bg-cyan-50/90 dark:bg-slate-900 border border-cyan-300 dark:border-cyan-700/80 space-y-2 animate-in fade-in">
+                        <span className="text-[11px] font-bold text-cyan-900 dark:text-cyan-200 block">
+                          New SKU Name for &quot;{item.sku}&quot;:
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="text"
+                            value={newSkuInput}
+                            onChange={(e) => setNewSkuInput(e.target.value)}
+                            placeholder="New SKU Name"
+                            disabled={isConfirmingSku}
+                            className="flex-1 px-2.5 py-1 text-xs rounded bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-cyan-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleCreateAndAssignNewSku(item.sku, newSkuInput)}
+                            disabled={!newSkuInput.trim() || isConfirmingSku}
+                            className="px-3 py-1 text-xs font-bold rounded bg-cyan-600 hover:bg-cyan-700 text-white transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {isConfirmingSku ? "..." : "✓ Create"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssigningVariant(null);
+                              setAssignMode(null);
+                              setInlineError(null);
+                            }}
+                            className="px-2.5 py-1 text-xs rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        {inlineError && assigningVariant === item.sku && (
+                          <div className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                            ⚠️ {inlineError}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ======================================================== */}
-      {/* TAB 3: COURIER PARTNER VIEW                               */}
-      {/* ======================================================== */}
-      {activeTab === "courier" && (
-        <div className="mt-4 space-y-3">
-          <div className="flex items-center justify-between pb-1">
-            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-neon" />
-              <span>Courier Partner Order ({sortedCouriers.length} Carriers Detected)</span>
-            </span>
-          </div>
-
+        {/* ======================================================== */}
+        {/* TAB 3: COURIER PARTNERS                                   */}
+        {/* ======================================================== */}
+        {activeTab === "courier" && (
           <div className="space-y-2">
-            {sortedCouriers.map((c, index) => {
+            {sortedCouriers.map((c, idx) => {
               const isCourierExcluded = excludedCouriers.has(c.courier.toUpperCase());
 
               return (
                 <div
                   key={c.courier}
-                  className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-colors ${
-                    isCourierExcluded
-                      ? "bg-rose-950/25 border-rose-800/40 opacity-70"
-                      : "bg-navy-950/70 border-navy-700/80 hover:border-cyan-neon/40"
+                  className={`p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60 transition-all ${
+                    isCourierExcluded ? "opacity-60" : ""
                   }`}
                 >
-                  {/* Left: Rank number + Courier Name */}
-                  <div className="flex items-center space-x-3">
-                    <span className="w-6 h-6 rounded-md bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-mono font-bold text-slate-300">
-                      {index + 1}
-                    </span>
-                    <span className={`font-bold text-sm tracking-wide ${isCourierExcluded ? "line-through text-slate-400" : "text-white"}`}>
-                      {formatCourierName(c.courier)}
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      ({c.percentage}% of batch)
-                    </span>
-                    {isCourierExcluded && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold">
-                        ✕ Excluded
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-mono text-[10px] text-slate-400 dark:text-slate-500 font-bold">#{idx + 1}</span>
+                      <span className={`font-bold text-sm ${isCourierExcluded ? "line-through text-slate-400" : "text-slate-900 dark:text-white"}`}>
+                        {formatCourierName(c.courier)}
                       </span>
-                    )}
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-300 text-xs">
+                        {c.label_count} ({c.percentage}%)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleExcludeCourier(c.courier)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                          isCourierExcluded
+                            ? "bg-rose-500 text-white border-rose-400"
+                            : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-300 border-slate-300 dark:border-slate-700"
+                        }`}
+                      >
+                        {isCourierExcluded ? "Excluded" : "✕ Exclude"}
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Right: Label Count Badge + Cross (✕) Exclude button */}
-                  <div className="flex items-center space-x-2.5">
-                    <span className="px-3 py-1 rounded-lg bg-navy-800 border border-cyan-neon/30 text-xs font-mono font-extrabold text-cyan-neon">
-                      {c.label_count} labels
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={() => toggleExcludeCourier(c.courier)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 border cursor-pointer ${
-                        isCourierExcluded
-                          ? "bg-rose-500 text-white border-rose-400 shadow-sm hover:bg-rose-600"
-                          : "bg-navy-900 text-slate-300 hover:text-rose-300 hover:bg-rose-950/40 border-navy-700 hover:border-rose-500/50"
-                      }`}
-                      title={
-                        isCourierExcluded
-                          ? `Click to re-include ${c.courier}`
-                          : `Click to cross out & exclude ${c.courier}`
-                      }
-                    >
-                      <span className="font-extrabold leading-none">✕</span>
-                      <span>{isCourierExcluded ? "Excluded" : "Exclude"}</span>
-                    </button>
+                  {/* Percentage Bar */}
+                  <div className="w-full bg-slate-200 dark:bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                    <div
+                      className="bg-indigo-500 h-full rounded-full transition-all"
+                      style={{ width: `${Math.max(4, c.percentage)}%` }}
+                    />
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* ======================================================== */}
+        {/* TAB 4: PLATFORMS / MARKETPLACES                          */}
+        {/* ======================================================== */}
+        {activeTab === "platforms" && (
+          <div className="space-y-2">
+            {((data.marketplace_breakdown && data.marketplace_breakdown.length > 0)
+              ? data.marketplace_breakdown
+              : [{ marketplace: "Meesho", label_count: data.total_labels, percentage: 100 }]
+            ).map((m) => {
+              const isMarketplaceExcluded = excludedMarketplaces.has(m.marketplace.toUpperCase());
+              const isFlipkart = m.marketplace.toLowerCase().includes("flipkart");
+              const isSnapdeal = m.marketplace.toLowerCase().includes("snapdeal");
+              const isAmazon = m.marketplace.toLowerCase().includes("amazon");
+
+              const icon = isFlipkart ? "🔵" : isSnapdeal ? "🔴" : isAmazon ? "🟡" : "🟠";
+              const barColor = isFlipkart ? "bg-blue-500" : isSnapdeal ? "bg-red-500" : isAmazon ? "bg-amber-500" : "bg-orange-500";
+
+              return (
+                <div
+                  key={m.marketplace}
+                  className={`p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60 transition-all ${
+                    isMarketplaceExcluded ? "opacity-60" : ""
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm">{icon}</span>
+                      <span className={`font-bold text-sm ${isMarketplaceExcluded ? "line-through text-slate-400" : "text-slate-900 dark:text-white"}`}>
+                        {m.marketplace}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-300 text-xs">
+                        {m.label_count} ({m.percentage}%)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleExcludeMarketplace(m.marketplace)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold border cursor-pointer ${
+                          isMarketplaceExcluded
+                            ? "bg-rose-500 text-white border-rose-400"
+                            : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-300 border-slate-300 dark:border-slate-700"
+                        }`}
+                      >
+                        {isMarketplaceExcluded ? "Excluded" : "✕ Exclude"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Percentage Bar */}
+                  <div className="w-full bg-slate-200 dark:bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                    <div
+                      className={`${barColor} h-full rounded-full transition-all`}
+                      style={{ width: `${Math.max(4, m.percentage)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

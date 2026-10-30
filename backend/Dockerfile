@@ -1,23 +1,27 @@
-# LabelFlow High-Performance Backend Dockerfile
+# ==============================================================================
+# LabelFlow Backend Dockerfile (Production Python 3.11 Slim)
+# ==============================================================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Ensure standard tools are installed
+# Install system dependencies needed for PyMuPDF, cryptography, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libmupdf-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependencies first for Docker layer caching
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Copy backend source code
 COPY . .
 
-# Cloud platforms like Render/Railway pass dynamic $PORT variable
-ENV PORT=8000
+# Ensure storage directory exists with write permissions
+RUN mkdir -p storage/jobs storage/temp && chmod -R 777 storage
+
 EXPOSE 8000
 
-# Start Uvicorn ASGI server bound to 0.0.0.0 and dynamic PORT with extended timeouts
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 75"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

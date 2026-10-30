@@ -2,22 +2,28 @@
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import {
+  apiClaimLocalHistory,
+  apiGetJobHistory,
   apiGetMe,
   apiLogin,
   apiLoginWithGoogle,
+  apiLoginWithVerifiedEmail,
   apiLogout,
   apiRegister,
   apiUpdateSettings,
   getStoredToken,
+  getStoredUser,
   setStoredToken,
 } from "./api-auth";
 import { User, UserSettings } from "./types";
+import { getLocalProcessingHistory, syncServerJobsToLocalHistory } from "./localHistory";
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginWithVerifiedEmail: (email: string, name?: string) => Promise<void>;
   loginWithGoogle: (data: { credential?: string; code?: string; redirect_uri?: string; link_drive?: boolean }) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -33,12 +39,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const claimAndSyncHistory = async () => {
+    try {
+      const localItems = getLocalProcessingHistory();
+      const jobIds = localItems.map((i) => i.job_id).filter(Boolean);
+      if (jobIds.length > 0) {
+        await apiClaimLocalHistory(jobIds);
+      }
+      const historyRes = await apiGetJobHistory(1, 20);
+      if (historyRes && Array.isArray(historyRes.items)) {
+        syncServerJobsToLocalHistory(historyRes.items);
+      }
+    } catch {
+      // Non-blocking background sync
+    }
+  };
+
   const refreshUser = async () => {
     try {
       const currentUser = await apiGetMe();
-      setUser(currentUser);
+      if (currentUser) {
+        setUser(currentUser);
+        claimAndSyncHistory();
+      } else if (!getStoredToken()) {
+        setUser(null);
+      }
     } catch {
-      setUser(null);
+      // Retain cached user on transient network disconnects
     } finally {
       setLoading(false);
     }
@@ -46,6 +73,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     const token = getStoredToken();
+    const cached = getStoredUser();
+    if (cached) {
+      setUser(cached);
+    }
     if (token) {
       refreshUser();
     } else {
@@ -58,6 +89,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const res = await apiLogin(email, password);
       setUser(res.user);
+      claimAndSyncHistory();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loginWithVerifiedEmail = async (email: string, name?: string) => {
+    setLoading(true);
+    try {
+      const res = await apiLoginWithVerifiedEmail(email, name);
+      setUser(res.user);
+      claimAndSyncHistory();
     } finally {
       setLoading(false);
     }
@@ -73,6 +116,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const res = await apiLoginWithGoogle(data);
       setUser(res.user);
+      claimAndSyncHistory();
     } finally {
       setLoading(false);
     }
@@ -83,6 +127,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       const res = await apiRegister(email, password, name);
       setUser(res.user);
+      claimAndSyncHistory();
     } finally {
       setLoading(false);
     }
@@ -110,6 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         loading,
         isAuthenticated: !!user,
         login,
+        loginWithVerifiedEmail,
         loginWithGoogle,
         register,
         logout,

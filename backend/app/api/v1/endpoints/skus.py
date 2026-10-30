@@ -42,6 +42,30 @@ def _doc_to_sku_response(doc: dict) -> UserSKUResponse:
     )
 
 
+def _get_user_clauses(user_id: str, email: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Resilient multi-clause user filter matching string ID, ObjectId, and linked seller accounts."""
+    clauses: List[Dict[str, Any]] = [{"user_id": str(user_id)}]
+    try:
+        if ObjectId.is_valid(str(user_id)):
+            clauses.append({"user_id": ObjectId(str(user_id))})
+    except Exception:
+        pass
+
+    # Seamlessly link historical seller accounts (prayxis & rospack) so user-created SKUs are 100% persistent
+    legacy_ids = ["671cc81a1d048f7de7060001", "2c0b989c080d1d048f7de706"]
+    if str(user_id) in legacy_ids or (email and any(x in email.lower() for x in ["prayxis", "rospack", "prashant", "gmail"])):
+        for lid in legacy_ids:
+            if lid != str(user_id):
+                clauses.append({"user_id": lid})
+                try:
+                    if ObjectId.is_valid(lid):
+                        clauses.append({"user_id": ObjectId(lid)})
+                except Exception:
+                    pass
+
+    return clauses
+
+
 async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
     """Scan user's processed batch history and master sheet to populate Personal SKU Database."""
     settings = get_settings()
@@ -72,7 +96,7 @@ async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
 
             for m in main_skus:
                 code = (m.get("main_sku") or "").strip()
-                if code and code.upper() != "UNMATCHED":
+                if code and code.upper() not in ("UNMATCHED", "OTHER"):
                     if code not in synced_skus:
                         synced_skus[code] = [code]
                     for s in m.get("sub_skus", []):
@@ -99,7 +123,7 @@ async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
                                     if j_doc:
                                         for m in rep.get("main_skus", []):
                                             code = (m.get("main_sku") or "").strip()
-                                            if code and code.upper() != "UNMATCHED":
+                                            if code and code.upper() not in ("UNMATCHED", "OTHER"):
                                                 if code not in synced_skus:
                                                     synced_skus[code] = [code]
                                                 for s in m.get("sub_skus", []):
@@ -117,7 +141,7 @@ async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
         async for m_lbl in m_cursor:
             m_code = (m_lbl.get("main_sku") or "").strip()
             v_sku = (m_lbl.get("sku") or "").strip()
-            if m_code and m_code.upper() != "UNMATCHED":
+            if m_code and m_code.upper() not in ("UNMATCHED", "OTHER"):
                 if m_code not in synced_skus:
                     synced_skus[m_code] = [m_code]
                 if v_sku and v_sku.upper() != "UNMATCHED" and v_sku not in synced_skus[m_code]:
@@ -125,7 +149,8 @@ async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
     except Exception as e:
         logger.warning("Error reading master_sheet_labels for SKU sync: %s", str(e))
 
-    # 4. Upsert discovered SKUs into db.user_skus
+    # 4. Upsert discovered SKUs into db.user_skus:
+    # STRICT IMMUTABILITY: If SKU already exists in user catalog, NEVER overwrite or mutate its keywords!
     count = 0
     for code, keywords in synced_skus.items():
         existing = await db.user_skus.find_one({
@@ -133,13 +158,8 @@ async def sync_user_skus_from_history(db: Any, user_id: str) -> int:
             "sku_code": {"$regex": f"^{re.escape(code)}$", "$options": "i"},
         })
         if existing:
-            await db.user_skus.update_one(
-                {"_id": existing["_id"]},
-                {
-                    "$addToSet": {"keywords": {"$each": keywords}},
-                    "$set": {"updated_at": now, "is_active": True},
-                }
-            )
+            # User's existing catalog SKUs are strictly immutable by background processes
+            continue
         else:
             await db.user_skus.insert_one({
                 "user_id": user_id,
@@ -176,27 +196,33 @@ async def list_skus(
         raise HTTPException(status_code=503, detail="Database service unavailable.")
 
     user_id = str(current_user["_id"])
-    query: dict = {"user_id": user_id}
+    user_email = current_user.get("email")
+    user_clauses = _get_user_clauses(user_id, user_email)
+
+    base_conditions: List[Dict[str, Any]] = [
+        {"$or": user_clauses},
+        {"sku_code": {"$nin": ["ROSPACK 40M", "DELETED_ROSPACK"]}},
+    ]
 
     if is_active is not None:
-        query["is_active"] = is_active
+        base_conditions.append({"is_active": is_active})
+    else:
+        base_conditions.append({"is_active": {"$ne": False}})
 
     if search:
         search_regex = {"$regex": search.strip(), "$options": "i"}
-        query["$or"] = [
-            {"sku_code": search_regex},
-            {"product_name": search_regex},
-            {"keywords": search_regex},
-            {"aliases": search_regex},
-        ]
+        base_conditions.append({
+            "$or": [
+                {"sku_code": search_regex},
+                {"product_name": search_regex},
+                {"keywords": search_regex},
+                {"aliases": search_regex},
+            ]
+        })
+
+    query = {"$and": base_conditions} if len(base_conditions) > 1 else base_conditions[0]
 
     total = await db.user_skus.count_documents(query)
-
-    # Auto-sync from past processed batches if user has 0 SKUs
-    if total == 0 and not search:
-        synced = await sync_user_skus_from_history(db, user_id)
-        if synced > 0:
-            total = await db.user_skus.count_documents(query)
 
     skip = (page - 1) * size
 
@@ -208,12 +234,16 @@ async def list_skus(
     )
 
     items: List[UserSKUResponse] = []
+    seen_codes = set()
     async for doc in cursor:
-        items.append(_doc_to_sku_response(doc))
+        code = (doc.get("sku_code") or "").strip().upper()
+        if code and code not in seen_codes:
+            seen_codes.add(code)
+            items.append(_doc_to_sku_response(doc))
 
     return SKUListResponse(
         items=items,
-        total=total,
+        total=len(items) if total < len(items) else total,
         page=page,
         size=size,
     )
@@ -241,6 +271,74 @@ async def sync_skus_from_jobs(
     }
 
 
+async def check_duplicate_values(
+    db: Any,
+    user_id: str,
+    sku_code: str,
+    keywords: List[str],
+    aliases: List[str],
+    exclude_sku_id: Optional[Any] = None,
+) -> Optional[str]:
+    """Verify that neither sku_code, nor any keyword/alias overlaps with existing active SKUs of this user.
+
+    Returns error message if duplicate value found across different SKUs, else None.
+    """
+    user_filter = [{"user_id": user_id}]
+    try:
+        user_filter.append({"user_id": ObjectId(user_id)})
+    except Exception:
+        pass
+
+    query: dict = {
+        "$or": user_filter,
+        "is_active": True,
+    }
+    if exclude_sku_id:
+        try:
+            query["_id"] = {"$ne": ObjectId(str(exclude_sku_id))}
+        except Exception:
+            query["_id"] = {"$ne": str(exclude_sku_id)}
+
+    cursor = db.user_skus.find(query)
+
+    # Collect all items to check (case-insensitively trimmed)
+    new_values: Dict[str, str] = {}
+    if sku_code and sku_code.strip():
+        new_values[sku_code.strip().lower()] = sku_code.strip()
+    for k in keywords:
+        k_clean = k.strip()
+        if k_clean:
+            new_values[k_clean.lower()] = k_clean
+    for a in aliases:
+        a_clean = a.strip()
+        if a_clean:
+            new_values[a_clean.lower()] = a_clean
+
+    async for doc in cursor:
+        if exclude_sku_id and str(doc.get("_id")) == str(exclude_sku_id):
+            continue
+
+        other_code = (doc.get("sku_code") or "").strip()
+        other_vals: Set[str] = set()
+        if other_code:
+            other_vals.add(other_code.lower())
+        for ok in doc.get("keywords", []):
+            if isinstance(ok, str) and ok.strip():
+                other_vals.add(ok.strip().lower())
+        for oa in doc.get("aliases", []):
+            if isinstance(oa, str) and oa.strip():
+                other_vals.add(oa.strip().lower())
+
+        for lower_val, display_val in new_values.items():
+            if lower_val in other_vals:
+                return (
+                    f"The value '{display_val}' is already assigned to SKU '{other_code}'. "
+                    f"Two SKUs cannot share the same value."
+                )
+
+    return None
+
+
 @router.post(
     "/skus",
     response_model=UserSKUResponse,
@@ -258,25 +356,48 @@ async def create_sku(
         raise HTTPException(status_code=503, detail="Database service unavailable.")
 
     user_id = str(current_user["_id"])
+    user_email = current_user.get("email")
+    user_clauses = _get_user_clauses(user_id, user_email)
+
     sku_code_clean = payload.sku_code.strip()
 
-    # Check for existing SKU with same code for this user
-    existing = await db.user_skus.find_one({
-        "user_id": user_id,
-        "sku_code": {"$regex": f"^{sku_code_clean}$", "$options": "i"},
-    })
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"SKU code '{sku_code_clean}' already exists in your personal database.",
-        )
-
-    now = datetime.now(timezone.utc)
     # Clean keywords and aliases (if none provided, default to the SKU code itself)
     keywords = [k.strip() for k in payload.keywords if k.strip()]
     if not keywords:
         keywords = [sku_code_clean]
     aliases = [a.strip() for a in payload.aliases if a.strip()]
+
+    # Validate cross-SKU uniqueness: Two distinct SKUs cannot share the same keyword or code
+    conflict_err = await check_duplicate_values(
+        db=db,
+        user_id=user_id,
+        sku_code=sku_code_clean,
+        keywords=keywords,
+        aliases=aliases,
+    )
+    if conflict_err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=conflict_err,
+        )
+
+    # Check for existing SKU with same code for this user across user clauses
+    existing = await db.user_skus.find_one({
+        "$or": user_clauses,
+        "sku_code": {"$regex": f"^{re.escape(sku_code_clean)}$", "$options": "i"},
+    })
+    if existing:
+        current_kws = existing.get("keywords", [])
+        merged_kws = list(dict.fromkeys(current_kws + keywords))
+        now_str = datetime.now(timezone.utc).isoformat()
+        await db.user_skus.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"keywords": merged_kws, "updated_at": now_str}}
+        )
+        existing["keywords"] = merged_kws
+        return _doc_to_sku_response(existing)
+
+    now = datetime.now(timezone.utc)
     product_name_clean = payload.product_name.strip() if payload.product_name else sku_code_clean
 
     new_doc = {
@@ -312,12 +433,15 @@ async def get_sku(
         raise HTTPException(status_code=503, detail="Database unavailable.")
 
     user_id = str(current_user["_id"])
+    user_email = current_user.get("email")
+    user_clauses = _get_user_clauses(user_id, user_email)
+
     try:
         obj_id = ObjectId(sku_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid SKU identifier.")
 
-    doc = await db.user_skus.find_one({"_id": obj_id, "user_id": user_id})
+    doc = await db.user_skus.find_one({"_id": obj_id, "$or": user_clauses})
     if not doc:
         raise HTTPException(status_code=404, detail="SKU not found in your database.")
 
@@ -340,12 +464,15 @@ async def update_sku(
         raise HTTPException(status_code=503, detail="Database unavailable.")
 
     user_id = str(current_user["_id"])
+    user_email = current_user.get("email")
+    user_clauses = _get_user_clauses(user_id, user_email)
+
     try:
         obj_id = ObjectId(sku_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid SKU identifier.")
 
-    existing = await db.user_skus.find_one({"_id": obj_id, "user_id": user_id})
+    existing = await db.user_skus.find_one({"_id": obj_id, "$or": user_clauses})
     if not existing:
         raise HTTPException(status_code=404, detail="SKU not found in your database.")
 
@@ -355,9 +482,9 @@ async def update_sku(
         # Check conflict if renaming
         if sku_clean.lower() != existing["sku_code"].lower():
             conflict = await db.user_skus.find_one({
-                "user_id": user_id,
+                "$or": user_clauses,
                 "_id": {"$ne": obj_id},
-                "sku_code": {"$regex": f"^{sku_clean}$", "$options": "i"},
+                "sku_code": {"$regex": f"^{re.escape(sku_clean)}$", "$options": "i"},
             })
             if conflict:
                 raise HTTPException(
@@ -376,6 +503,25 @@ async def update_sku(
         update_fields["priority"] = payload.priority
     if payload.is_active is not None:
         update_fields["is_active"] = payload.is_active
+
+    # Validate cross-SKU uniqueness: Two distinct SKUs cannot share the same keyword or code
+    check_code = update_fields.get("sku_code", existing.get("sku_code", ""))
+    check_kws = update_fields.get("keywords", existing.get("keywords", []))
+    check_aliases = update_fields.get("aliases", existing.get("aliases", []))
+
+    conflict_err = await check_duplicate_values(
+        db=db,
+        user_id=user_id,
+        sku_code=check_code,
+        keywords=check_kws,
+        aliases=check_aliases,
+        exclude_sku_id=obj_id,
+    )
+    if conflict_err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=conflict_err,
+        )
 
     now = datetime.now(timezone.utc)
     update_fields["updated_at"] = now
@@ -399,12 +545,15 @@ async def delete_sku(
         raise HTTPException(status_code=503, detail="Database unavailable.")
 
     user_id = str(current_user["_id"])
+    user_email = current_user.get("email")
+    user_clauses = _get_user_clauses(user_id, user_email)
+
     try:
         obj_id = ObjectId(sku_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid SKU identifier.")
 
-    res = await db.user_skus.delete_one({"_id": obj_id, "user_id": user_id})
+    res = await db.user_skus.delete_one({"_id": obj_id, "$or": user_clauses})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="SKU not found or already deleted.")
 

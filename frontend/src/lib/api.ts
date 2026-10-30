@@ -9,6 +9,7 @@ import {
   ProcessingJobResponse,
   UploadInspectionResponse,
 } from "./types";
+import { getLocalProcessingHistory } from "./localHistory";
 
 function getRequestAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -140,6 +141,7 @@ export async function processLabelsOnBackend(
   formData.append("sort_by", config.sort_by);
   formData.append("remove_invoice", String(config.remove_invoice));
   formData.append("enable_sku_picklist", String(config.enable_sku_picklist));
+  formData.append("smart_sku_detection", String(Boolean(config.smart_sku_detection)));
 
   if (marketplace) {
     formData.append("marketplace", marketplace);
@@ -154,6 +156,21 @@ export async function processLabelsOnBackend(
   if (config.excluded_couriers && config.excluded_couriers.length > 0) {
     formData.append("excluded_couriers", JSON.stringify(config.excluded_couriers));
   }
+  if (config.excluded_order_ids && config.excluded_order_ids.length > 0) {
+    formData.append("excluded_order_ids", JSON.stringify(config.excluded_order_ids));
+  }
+  if (config.excluded_marketplaces && config.excluded_marketplaces.length > 0) {
+    formData.append("excluded_marketplaces", JSON.stringify(config.excluded_marketplaces));
+  }
+
+  // Include recent job IDs for duplicate order / label detection across past sessions
+  try {
+    const recent = getLocalProcessingHistory();
+    if (recent && recent.length > 0) {
+      const recentJobIds = recent.map((r) => r.job_id).slice(0, 30);
+      formData.append("recent_job_ids", JSON.stringify(recentJobIds));
+    }
+  } catch {}
 
   let res: Response | null = null;
   let lastError: string | null = null;
@@ -250,6 +267,14 @@ export function getViewPdfUrl(jobId: string): string {
 export function getDownloadPdfUrl(jobId: string): string {
   const baseUrl = getApiBaseUrl();
   return `${baseUrl}/labels/jobs/${jobId}/download/pdf`;
+}
+
+/**
+ * URL to download consolidated SKU picklist CSV.
+ */
+export function getDownloadPicklistUrl(jobId: string): string {
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}/labels/jobs/${jobId}/download/picklist`;
 }
 
 /**

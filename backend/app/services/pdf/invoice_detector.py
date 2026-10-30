@@ -15,17 +15,8 @@ class InvoiceDetectorService:
 
         Returns (can_safely_remove, reason_if_not).
         """
-        # Case 1: Full-page tax invoice
+        # Case 1: Full-page standalone tax invoice
         if inspection.layout_type == "tax_invoice":
-            # Safety check: ensure page does NOT contain critical delivery indicators
-            for block in inspection.text_blocks:
-                text = block[4].lower()
-                if "deliver to" in text or "ship to" in text or "awb" in text:
-                    return (
-                        False,
-                        "Invoice page contains shipping address indicators. "
-                        "Flagged for manual review to prevent parcel loss.",
-                    )
             return True, None
 
         # Case 2: Split layout (Label on top, Invoice on bottom)

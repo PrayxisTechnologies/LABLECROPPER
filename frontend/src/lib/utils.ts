@@ -19,7 +19,7 @@ export function formatBytes(bytes: number, decimals: number = 1): string {
  */
 export function validateClientPdf(
   file: File,
-  maxSizeMb: number = 50
+  maxSizeMb: number = 2048
 ): { valid: boolean; error?: string } {
   // Check extension
   if (!file.name.toLowerCase().endsWith(".pdf")) {
@@ -45,13 +45,15 @@ export function validateClientPdf(
     };
   }
 
-  // Check max size
-  const maxBytes = maxSizeMb * 1024 * 1024;
-  if (file.size > maxBytes) {
-    return {
-      valid: false,
-      error: `"${file.name}" exceeds the maximum file size limit of ${maxSizeMb} MB (${formatBytes(file.size)}).`,
-    };
+  // Check max size (if configured > 0)
+  if (maxSizeMb > 0) {
+    const maxBytes = maxSizeMb * 1024 * 1024;
+    if (file.size > maxBytes) {
+      return {
+        valid: false,
+        error: `"${file.name}" exceeds the maximum file size limit of ${maxSizeMb} MB (${formatBytes(file.size)}).`,
+      };
+    }
   }
 
   return { valid: true };

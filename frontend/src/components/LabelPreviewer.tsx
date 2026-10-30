@@ -46,18 +46,24 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
   const handleDownload = useCallback(() => {
     const a = document.createElement("a");
     a.href = downloadPdfUrl;
-    a.download = `meesho_thermal_4x6_${result.job_id}.pdf`;
+    const downloadFilename =
+      result.formatted_filename || `${(result.marketplace || "meesho").toLowerCase()}_thermal_4x6_${result.job_id}.pdf`;
+    a.download = downloadFilename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [downloadPdfUrl, result.job_id]);
+  }, [downloadPdfUrl, result.formatted_filename, result.job_id]);
 
   // Keyboard shortcut listener (Ctrl+P, Ctrl+S, Esc, F)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Escape to close preview
+      // Escape to close preview or exit fullscreen
       if (e.key === "Escape") {
-        onReset();
+        if (isFullscreen) {
+          setIsFullscreen(false);
+        } else {
+          onReset();
+        }
       }
       // Ctrl+P or Cmd+P to print
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
@@ -83,75 +89,53 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onReset, handlePrint, handleDownload]);
+  }, [isFullscreen, onReset, handlePrint, handleDownload]);
 
   return (
     <div
-      className={`w-full flex flex-col bg-[#07111F] border border-cyan-neon/30 rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 ${
+      className={`w-full flex flex-col bg-white dark:bg-[#0A101D] border border-slate-200 dark:border-slate-800/90 rounded-2xl shadow-xl overflow-hidden transition-all duration-300 ${
         isFullscreen
-          ? "fixed inset-0 z-50 rounded-none h-screen"
-          : "h-[85vh] sm:h-[90vh] my-4"
+          ? "fixed inset-0 z-50 rounded-none h-screen bg-white dark:bg-[#070B14]"
+          : "h-[calc(100vh-100px)] min-h-[680px]"
       }`}
     >
-      {/* Top Bar matching E-cropper styling */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 bg-[#0C182B] border-b border-navy-700/80 flex-shrink-0">
-        {/* Left: MEESHO badge & Document Preview title */}
-        <div className="flex items-center space-x-3">
-          <span className="px-2.5 py-1 rounded-md bg-[#7B61FF] text-white text-[11px] font-extrabold uppercase tracking-wider shadow-sm">
-            MEESHO
+      {/* Top Header Bar */}
+      <div className="flex items-center justify-between px-3.5 sm:px-5 py-2.5 bg-slate-50/95 dark:bg-[#0D1526]/90 border-b border-slate-200 dark:border-slate-800/80 backdrop-blur-sm flex-shrink-0">
+        {/* Left: Platform badge & summary */}
+        <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
+          <span className="px-2 py-0.5 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-700 dark:text-violet-300 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider shrink-0">
+            {(result.marketplace || "Meesho").toUpperCase()}
           </span>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3">
-            <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">
+
+          <div className="flex items-center space-x-2 truncate">
+            <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white tracking-tight truncate">
               Document Preview
             </h2>
-            <div className="flex items-center space-x-2 text-xs text-slate-400">
-              <span className="hidden sm:inline">•</span>
-              <span className="font-semibold text-cyan-neon">
-                {totalPages} {totalPages === 1 ? "Label" : "Labels"} Cropped
+            <span className="text-slate-400 dark:text-slate-600 hidden sm:inline">•</span>
+            <span className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 font-medium shrink-0">
+              <span className="text-violet-600 dark:text-violet-400 font-bold">{totalPages}</span>{" "}
+              {totalPages === 1 ? "Label" : "Labels"}
+            </span>
+
+            {result.total_invoices_removed > 0 && (
+              <span className="hidden xl:inline-flex items-center text-[10px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 px-2 py-0.5 rounded-full shrink-0">
+                ✓ {result.total_invoices_removed} invoice(s) stripped
               </span>
-              <span>•</span>
-              <span className="font-mono text-[11px] text-slate-400">
-                Zero Margins • Thermal Print Ready
-              </span>
-              {result.total_invoices_removed > 0 && (
-                <>
-                  <span className="hidden md:inline">•</span>
-                  <span className="hidden md:inline text-emerald-400">
-                    {result.total_invoices_removed} invoice(s) removed
-                  </span>
-                </>
-              )}
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Right: Actions (Download Ctrl+S, Print Ctrl+P, View Toggle, Close Esc) */}
-        <div className="flex items-center space-x-2 sm:space-x-2.5">
-          {/* Google Drive Direct Link (if synced) */}
-          {result.downloads?.google_drive_pdf && (
-            <a
-              href={result.downloads.google_drive_pdf}
-              target="_blank"
-              rel="noreferrer"
-              className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-400 text-xs font-bold transition-colors"
-              title="Open cropped label in your personal Google Drive"
-            >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              </svg>
-              <span>Drive Link</span>
-            </a>
-          )}
-
+        {/* Right: Actions Toolbar */}
+        <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
           {/* Picklist CSV Button (if generated) */}
           {picklistCsvUrl && (
             <a
               href={picklistCsvUrl}
               download
-              className="hidden lg:flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-navy-800 hover:bg-navy-700 border border-purple-brand/40 text-purple-300 text-xs font-semibold transition-colors"
+              className="hidden lg:flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-700/80 border border-slate-300 dark:border-slate-700/70 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white text-[11px] font-medium transition-colors"
               title="Download consolidated SKU picklist CSV"
             >
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
                 <line x1="8" y1="13" x2="16" y2="13" />
@@ -160,77 +144,84 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
             </a>
           )}
 
-          {/* Toggle Batch Insights */}
-          <button
-            type="button"
-            onClick={() => setShowInsightsDrawer(!showInsightsDrawer)}
-            className="hidden md:flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-navy-800 hover:bg-navy-750 text-slate-300 text-xs font-medium border border-navy-700"
-            title="View detected couriers & SKUs"
-          >
-            <span>{showInsightsDrawer ? "Hide Details" : "Details"}</span>
-          </button>
-
-          {/* Download Button with Shortcut */}
+          {/* Download Button */}
           <button
             type="button"
             onClick={handleDownload}
-            className="px-3 sm:px-4 py-1.5 rounded-xl bg-navy-800 hover:bg-navy-700 text-white border border-cyan-neon/40 hover:border-cyan-neon text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-sm"
+            className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/90 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white border border-slate-300 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-sm"
             title="Download 4x6 Thermal PDF (Ctrl+S)"
           >
-            <svg className="w-3.5 h-3.5 text-cyan-neon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <svg className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
             <span>Download</span>
-            <span className="hidden sm:inline text-[10px] text-slate-400 font-mono">
-              Ctrl+S
+            <span className="hidden sm:inline text-[9px] text-slate-500 dark:text-slate-400 font-mono px-1 py-0.2 rounded bg-slate-200 dark:bg-slate-900 border border-slate-300 dark:border-slate-700/60">
+              ^S
             </span>
           </button>
 
-          {/* Print Button with Shortcut */}
+          {/* Print Button (Primary) */}
           <button
             type="button"
             onClick={handlePrint}
-            className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-brand to-purple-dim hover:brightness-110 text-white text-xs font-bold flex items-center space-x-1.5 transition-all shadow-md active:scale-95"
+            className="px-3 sm:px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 via-indigo-600 to-violet-700 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-bold flex items-center space-x-1.5 transition-all shadow-md shadow-violet-950/40 active:scale-95"
             title="Print 4x6 Thermal Labels (Ctrl+P)"
           >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <polyline points="6 9 6 2 18 2 18 9" />
               <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
               <rect x="6" y="14" width="12" height="8" />
             </svg>
             <span>Print</span>
-            <span className="hidden sm:inline text-[10px] text-purple-200 font-mono">
-              Ctrl+P
+            <span className="hidden sm:inline text-[9px] text-violet-200 font-mono px-1 py-0.2 rounded bg-violet-900/60 border border-violet-400/30">
+              ^P
             </span>
           </button>
 
-          {/* Fullscreen / Standard View Toggle */}
+          {/* Details toggle */}
+          <button
+            type="button"
+            onClick={() => setShowInsightsDrawer(!showInsightsDrawer)}
+            className={`p-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              showInsightsDrawer
+                ? "bg-violet-100 dark:bg-violet-500/20 text-violet-800 dark:text-violet-300 border-violet-300 dark:border-violet-500/40"
+                : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/60 dark:hover:bg-slate-700/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border-slate-300 dark:border-slate-700/60"
+            }`}
+            title="Toggle batch details & courier breakdown"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+          </button>
+
+          {/* Fullscreen Toggle */}
           <button
             type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="hidden sm:flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-navy-800 hover:bg-navy-700 text-slate-300 text-xs border border-navy-700 transition-colors"
-            title="Toggle Fullscreen View (F)"
+            className="p-1.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/80 border border-transparent hover:border-slate-300 dark:hover:border-slate-700/60 transition-colors"
+            title={isFullscreen ? "Exit Fullscreen (Esc)" : "Fullscreen (F)"}
           >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {isFullscreen ? (
                 <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
               ) : (
                 <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
               )}
             </svg>
-            <span>{isFullscreen ? "Standard" : "Full View"}</span>
           </button>
 
-          {/* Close / Return to Upload Button */}
+          {/* Close / Return Button */}
           <button
             type="button"
             onClick={onReset}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-navy-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800/80 border border-transparent hover:border-slate-300 dark:hover:border-slate-700/60 transition-colors"
             title="Close Preview & Process Another Batch (Esc)"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -239,43 +230,43 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
       </div>
 
       {/* Main Viewing Workspace */}
-      <div className="relative flex-1 w-full bg-[#1A1D20] overflow-hidden flex">
-        {/* The Native / Embedded PDF Viewer showing processed labels one after another */}
+      <div className="relative flex-1 w-full bg-slate-100 dark:bg-[#050811] overflow-hidden flex">
+        {/* The Native / Embedded PDF Viewer showing processed labels at 100% natural scale */}
         <iframe
           ref={iframeRef}
-          id="meesho-preview-pdf-frame"
-          src={`${viewPdfUrl}#toolbar=1&navpanes=0&view=FitH`}
-          className="w-full h-full border-0 bg-[#2b2b2b]"
-          title="Meesho 4x6 Thermal Labels Preview"
+          id="preview-pdf-frame"
+          src={`${viewPdfUrl}#toolbar=1&navpanes=0&zoom=100`}
+          className="w-full h-full border-0 bg-slate-50 dark:bg-[#0e1320]"
+          title={`${result.marketplace || "Shipping"} 4x6 Thermal Labels Preview`}
         />
 
         {/* Collapsible Details Drawer */}
         {showInsightsDrawer && (
-          <div className="absolute top-0 right-0 bottom-0 w-80 bg-navy-900/95 backdrop-blur-md border-l border-navy-700 p-5 overflow-y-auto space-y-4 shadow-2xl z-20 animate-in slide-in-from-right duration-200">
-            <div className="flex items-center justify-between pb-3 border-b border-navy-750">
-              <h3 className="font-bold text-white text-sm">Batch Details</h3>
+          <div className="absolute top-0 right-0 bottom-0 w-80 bg-white/95 dark:bg-[#0B1220]/95 backdrop-blur-md border-l border-slate-200 dark:border-slate-800 p-5 overflow-y-auto space-y-4 shadow-2xl z-20 animate-in slide-in-from-right duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="font-bold text-slate-900 dark:text-white text-sm">Batch Details</h3>
               <button
                 type="button"
                 onClick={() => setShowInsightsDrawer(false)}
-                className="text-slate-400 hover:text-white text-sm"
+                className="text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white text-base leading-none p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800"
               >
-                ×
+                ✕
               </button>
             </div>
 
             {/* Courier Breakdown */}
             <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-cyan-neon uppercase tracking-wider">
+              <h4 className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 Couriers Detected
               </h4>
               <div className="space-y-1.5">
                 {result.courier_breakdown.map((c) => (
                   <div
                     key={c.courier}
-                    className="flex items-center justify-between text-xs py-1.5 px-3 rounded-lg bg-navy-850 border border-navy-700/60"
+                    className="flex items-center justify-between text-xs py-2 px-3 rounded-lg bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800"
                   >
-                    <span className="text-white font-medium">{c.courier}</span>
-                    <span className="font-mono text-cyan-neon font-semibold">
+                    <span className="text-slate-800 dark:text-slate-200 font-medium">{c.courier}</span>
+                    <span className="font-mono text-violet-600 dark:text-violet-400 font-bold">
                       {c.label_count} ({c.percentage}%)
                     </span>
                   </div>
@@ -285,16 +276,16 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
 
             {/* Picklist Summary */}
             {result.picklist_items && result.picklist_items.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-navy-750">
+              <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold text-purple-300 uppercase tracking-wider">
+                  <h4 className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                     SKU Picklist ({result.picklist_items.length})
                   </h4>
                   {picklistCsvUrl && (
                     <a
                       href={picklistCsvUrl}
                       download
-                      className="text-[11px] text-cyan-neon hover:underline"
+                      className="text-[11px] text-violet-600 dark:text-violet-400 hover:underline font-medium"
                     >
                       Download CSV
                     </a>
@@ -304,10 +295,10 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
                   {result.picklist_items.map((item, idx) => (
                     <div
                       key={idx}
-                      className="flex items-center justify-between text-[11px] p-2 rounded bg-navy-850 border border-navy-700/60"
+                      className="flex items-center justify-between text-[11px] p-2 rounded-lg bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800"
                     >
-                      <span className="font-mono text-purple-200">{item.sku}</span>
-                      <span className="text-slate-300">{item.total_quantity} unit(s)</span>
+                      <span className="font-mono text-slate-800 dark:text-slate-200 truncate pr-2">{item.sku}</span>
+                      <span className="text-slate-500 dark:text-slate-400 shrink-0 font-medium">{item.total_quantity} qty</span>
                     </div>
                   ))}
                 </div>
@@ -316,17 +307,32 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
 
             {/* Ambiguity / Safety Warnings if any */}
             {result.total_pages_flagged > 0 && (
-              <div className="p-3 rounded-xl bg-amber-950/50 border border-amber-500/50 text-amber-200 text-xs space-y-1">
-                <span className="font-bold text-amber-300 block">
-                  {result.total_pages_flagged} Page(s) Flagged for Review
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-500/40 text-amber-900 dark:text-amber-200 text-xs space-y-1">
+                <span className="font-bold text-amber-700 dark:text-amber-300 block">
+                  {result.total_pages_flagged} Page(s) Flagged
                 </span>
-                <p className="text-[11px] leading-relaxed">
+                <p className="text-[11px] text-amber-800 dark:text-amber-300/80 leading-relaxed">
                   Pages with ambiguous layouts or address blocks near the invoice line were preserved in full to prevent parcel delivery loss.
                 </p>
               </div>
             )}
           </div>
         )}
+      </div>
+
+      {/* Subtle Bottom Status Bar */}
+      <div className="px-4 py-1.5 bg-slate-100 dark:bg-[#090E1A] border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
+        <div className="flex items-center space-x-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
+          <span>4×6 inch Thermal Format</span>
+          <span className="text-slate-400 dark:text-slate-600">•</span>
+          <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">Standard 203/300 DPI</span>
+        </div>
+        <div className="hidden sm:flex items-center space-x-3 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+          <span>Ctrl+P to Print</span>
+          <span>Ctrl+S to Save</span>
+          <span>Esc to Close</span>
+        </div>
       </div>
     </div>
   );

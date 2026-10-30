@@ -52,8 +52,8 @@ class PDFValidatorService:
                 content,
             )
 
-        # 3. File size limit check
-        if size_bytes > self.settings.max_upload_bytes:
+        # 3. File size limit check (if configured)
+        if self.settings.MAX_UPLOAD_SIZE_MB > 0 and size_bytes > self.settings.max_upload_bytes:
             errors.append(
                 f"File size exceeds limit of {self.settings.MAX_UPLOAD_SIZE_MB} MB "
                 f"({size_bytes / (1024 * 1024):.2f} MB)."

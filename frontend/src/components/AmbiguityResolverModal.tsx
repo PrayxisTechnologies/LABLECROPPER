@@ -104,12 +104,12 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/85 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-2xl bg-navy-900 border border-cyan-neon/40 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-950/80 backdrop-blur-md animate-fade-in">
+      <div className="w-full max-w-2xl bg-white dark:bg-navy-900 border border-slate-200 dark:border-cyan-neon/40 rounded-2xl p-6 shadow-2xl relative max-h-[90vh] flex flex-col transition-colors">
         {/* Header */}
-        <div className="flex items-start justify-between pb-4 border-b border-navy-800 shrink-0">
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-navy-800 shrink-0">
           <div>
-            <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-cyan-neon/15 border border-cyan-neon/30 text-cyan-neon text-[11px] font-bold mb-1">
+            <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-neon/15 border border-cyan-300 dark:border-cyan-neon/30 text-cyan-800 dark:text-cyan-neon text-[11px] font-bold mb-1">
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="8" x2="12" y2="12" />
@@ -117,17 +117,17 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
               </svg>
               <span>New SKU Found ({ambiguousLabels.length})</span>
             </div>
-            <h3 className="text-base font-bold text-white">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
               Unrecognized Product Detected on Shipping Label
             </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               Select the matching keyword (Value) and SKU Name (Key). All matching labels will be automatically grouped together and saved to your SKU Database.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-navy-800 transition-colors"
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-navy-800 transition-colors"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -137,7 +137,7 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
         </div>
 
         {error && (
-          <div className="mt-3 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs shrink-0">
+          <div className="mt-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs shrink-0">
             {error}
           </div>
         )}
@@ -153,28 +153,28 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
             return (
               <div
                 key={idx}
-                className="p-4 rounded-xl bg-navy-950 border border-navy-800 space-y-3"
+                className="p-4 rounded-xl bg-slate-50 dark:bg-navy-950 border border-slate-200 dark:border-navy-800 space-y-3"
               >
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-white">
+                  <span className="font-semibold text-slate-800 dark:text-white">
                     Item #{idx + 1} • {item.filename} (Page {item.page_number})
                   </span>
-                  <span className="text-[10px] text-cyan-neon font-mono bg-navy-900 px-2 py-0.5 rounded border border-navy-800">
+                  <span className="text-[10px] text-cyan-700 dark:text-cyan-neon font-mono bg-cyan-50 dark:bg-navy-900 px-2 py-0.5 rounded border border-cyan-200 dark:border-navy-800">
                     Smart AI Detected
                   </span>
                 </div>
 
                 {/* Original Detected Full SKU */}
-                <div className="p-3 rounded-xl bg-gradient-to-r from-amber-500/10 via-navy-900 to-navy-900 border border-amber-500/30">
+                <div className="p-3 rounded-xl bg-gradient-to-r from-amber-50 to-slate-50 dark:from-amber-500/10 dark:via-navy-900 dark:to-navy-900 border border-amber-300 dark:border-amber-500/30">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] uppercase tracking-wider font-bold text-amber-400">
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-amber-700 dark:text-amber-400">
                       Original Detected Full SKU
                     </span>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400">
                       From Shipping Label
                     </span>
                   </div>
-                  <div className="text-sm font-mono font-bold text-amber-300 tracking-wide select-all">
+                  <div className="text-sm font-mono font-bold text-amber-800 dark:text-amber-300 tracking-wide select-all">
                     {fullOriginalSku}
                   </div>
                 </div>
@@ -183,10 +183,10 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
                 {item.detected_candidates && item.detected_candidates.length > 0 && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-[11px] font-bold text-slate-200">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
                         Select Matching Keyword (Value) from this SKU:
                       </label>
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400">
                         Click to choose
                       </span>
                     </div>
@@ -200,8 +200,8 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
                             onClick={() => handleSelectChip(item.label_index, cand)}
                             className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all border flex items-center space-x-1.5 ${
                               isSelected
-                                ? "bg-cyan-neon text-navy-950 border-cyan-neon shadow-glow scale-[1.02]"
-                                : "bg-navy-900 border-navy-700 text-slate-200 hover:border-cyan-neon/50 hover:text-cyan-neon hover:bg-navy-850"
+                                ? "bg-cyan-500 dark:bg-cyan-neon text-white dark:text-navy-950 border-cyan-500 dark:border-cyan-neon shadow-sm scale-[1.02]"
+                                : "bg-white dark:bg-navy-900 border-slate-300 dark:border-navy-700 text-slate-700 dark:text-slate-200 hover:border-cyan-500 dark:hover:border-cyan-neon/50 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-50 dark:hover:bg-navy-850"
                             }`}
                           >
                             <span>{cand}</span>
@@ -220,7 +220,7 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
                 {/* Key-Value Pair: Value (Keyword) & Key (SKU Name) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-200 mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-200 mb-1">
                       Matching Keyword / Value (Value) *
                     </label>
                     <input
@@ -229,15 +229,15 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
                       value={currentKw}
                       onChange={(e) => handleKeywordChange(item.label_index, e.target.value)}
                       placeholder="e.g. GREEN, RSPK, RSPK GREEN"
-                      className="w-full px-3 py-2 rounded-xl bg-navy-900 border border-navy-700 text-cyan-neon font-mono font-bold text-xs focus:outline-none focus:border-cyan-neon shadow-inner"
+                      className="w-full px-3 py-2 rounded-xl bg-white dark:bg-navy-900 border border-slate-300 dark:border-navy-700 text-cyan-700 dark:text-cyan-neon font-mono font-bold text-xs focus:outline-none focus:border-cyan-500 dark:focus:border-cyan-neon shadow-inner"
                     />
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      Labels containing this keyword (e.g. <span className="text-slate-300 font-mono">001 to 2939</span>) will match this SKU.
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                      Labels containing this keyword (e.g. <span className="text-slate-700 dark:text-slate-300 font-mono">001 to 2939</span>) will match this SKU.
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-200 mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-200 mb-1">
                       SKU Name / Display Name (Key) *
                     </label>
                     <input
@@ -246,25 +246,25 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
                       value={currentSku}
                       onChange={(e) => handleSkuNameChange(item.label_index, e.target.value)}
                       placeholder="e.g. GREEN"
-                      className="w-full px-3 py-2 rounded-xl bg-navy-900 border border-navy-700 text-white font-mono font-bold text-xs focus:outline-none focus:border-cyan-neon shadow-inner"
+                      className="w-full px-3 py-2 rounded-xl bg-white dark:bg-navy-900 border border-slate-300 dark:border-navy-700 text-slate-900 dark:text-white font-mono font-bold text-xs focus:outline-none focus:border-cyan-500 dark:focus:border-cyan-neon shadow-inner"
                     />
-                    <p className="text-[10px] text-slate-400 mt-1">
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
                       Display title on Picklist and label group sorting.
                     </p>
                   </div>
                 </div>
 
                 {/* Remember Rule & Add to Database Checkbox */}
-                <div className="pt-2 flex items-center justify-between text-xs border-t border-navy-900">
-                  <label className="inline-flex items-center space-x-2 cursor-pointer text-slate-300 text-[11px]">
+                <div className="pt-2 flex items-center justify-between text-xs border-t border-slate-200 dark:border-navy-900">
+                  <label className="inline-flex items-center space-x-2 cursor-pointer text-slate-600 dark:text-slate-300 text-[11px]">
                     <input
                       type="checkbox"
                       checked={isRemember}
                       onChange={() => handleToggleRemember(item.label_index)}
-                      className="w-3.5 h-3.5 rounded text-cyan-neon focus:ring-0 bg-navy-900 border-navy-700"
+                      className="w-3.5 h-3.5 rounded text-cyan-600 dark:text-cyan-neon focus:ring-0 bg-white dark:bg-navy-900 border-slate-300 dark:border-navy-700"
                     />
                     <span>
-                      Save Key & Value to my Personal SKU Database (Auto-applies to all future shipping labels)
+                      Save Key &amp; Value to my Personal SKU Database (Auto-applies to all future shipping labels)
                     </span>
                   </label>
                 </div>
@@ -272,18 +272,18 @@ export const AmbiguityResolverModal: React.FC<AmbiguityResolverModalProps> = ({
             );
           })}
 
-          <div className="pt-3 border-t border-navy-800 flex items-center justify-end space-x-2 shrink-0">
+          <div className="pt-3 border-t border-slate-200 dark:border-navy-800 flex items-center justify-end space-x-2 shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-navy-800 hover:bg-navy-700 text-slate-300 text-xs font-semibold transition-colors"
+              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-navy-800 dark:hover:bg-navy-700 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors"
             >
               Skip For Now
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-neon to-cyan-400 text-navy-950 font-bold text-xs shadow-glow hover:opacity-95 transition-all active:scale-95 disabled:opacity-50"
+              className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 dark:from-cyan-neon dark:to-cyan-400 text-white dark:text-navy-950 font-bold text-xs shadow-md hover:opacity-95 transition-all active:scale-95 disabled:opacity-50"
             >
               {loading ? "Saving & Re-sorting Labels..." : "Save SKU & Apply"}
             </button>
