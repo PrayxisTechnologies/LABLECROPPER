@@ -551,3 +551,48 @@ async def get_job_status(job_id: str) -> ProcessingJobResponse:
         data = json.load(f)
 
     return ProcessingJobResponse.model_validate(data)
+
+
+@router.get(
+    "/extension/download",
+    summary="Download Chrome Extension (.zip)",
+    description="Packages and streams the latest LabelFlow Chrome Extension ZIP for 1-click browser install.",
+)
+async def download_extension_zip():
+    """Dynamically packages the extension directory into a ZIP archive and streams it for download."""
+    import io
+    import zipfile
+
+    candidates = [
+        Path.cwd() / "extension",
+        Path(__file__).resolve().parent.parent.parent.parent.parent / "extension",
+        Path(settings.BASE_DIR) / "extension" if hasattr(settings, "BASE_DIR") else Path.cwd() / "extension",
+    ]
+    ext_dir = None
+    for c in candidates:
+        if c.exists() and (c / "manifest.json").exists():
+            ext_dir = c
+            break
+
+    if not ext_dir:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="LabelFlow Extension package directory was not found on server.",
+        )
+
+    mem_zip = io.BytesIO()
+    with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for f in ext_dir.rglob("*"):
+            if f.is_file() and not f.name.endswith(".zip") and not f.name.startswith("."):
+                arcname = f.relative_to(ext_dir)
+                zf.write(f, arcname=str(arcname))
+
+    mem_zip.seek(0)
+    return Response(
+        content=mem_zip.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="LabelFlow-Chrome-Extension.zip"',
+            "Cache-Control": "no-cache",
+        },
+    )

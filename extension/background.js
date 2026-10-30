@@ -6,7 +6,55 @@
 importScripts("vault-storage.js");
 
 const PENDING_VAULT_IMPORT_KEY = "labelflow_pending_vault_import";
-const GENERATOR_URL = "http://localhost:3000/#generator";
+const AUTH_STORAGE_KEY = "labelflow_auth_state";
+
+// Primary Production Domain and Fallbacks
+const PRIMARY_DOMAIN = "https://labelcropper.prayxis.in";
+const GENERATOR_URL = "https://labelcropper.prayxis.in/#generator";
+const LOGIN_URL = "https://labelcropper.prayxis.in/login";
+
+// Helper: Check if a URL belongs to LabelFlow (Production or Localhost)
+function isLabelFlowUrl(urlStr) {
+  if (!urlStr) return false;
+  try {
+    const u = new URL(urlStr);
+    return (
+      u.hostname === "labelcropper.prayxis.in" ||
+      u.hostname.endsWith(".prayxis.in") ||
+      ((u.hostname === "localhost" || u.hostname === "127.0.0.1") && u.port === "3000")
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Retrieve cached auth status or query active tabs
+async function getCachedAuthStatus() {
+  try {
+    const stored = await chrome.storage.local.get(AUTH_STORAGE_KEY);
+    const auth = stored[AUTH_STORAGE_KEY];
+    if (auth && auth.isLoggedIn) {
+      return auth;
+    }
+
+    // Attempt live check across open LabelFlow tabs
+    const allTabs = await chrome.tabs.query({});
+    for (const t of allTabs) {
+      if (t.id && isLabelFlowUrl(t.url)) {
+        try {
+          const liveAuth = await chrome.tabs.sendMessage(t.id, { type: "GET_AUTH_STATUS" });
+          if (liveAuth && liveAuth.isLoggedIn) {
+            await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: liveAuth });
+            return liveAuth;
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.debug("[LabelFlow Background] Auth check error:", err);
+  }
+  return { isLoggedIn: false, user: null, token: null };
+}
 
 // Helper: Extract clean basename from path
 function getBasename(fullPath) {
@@ -340,6 +388,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // Action: CHECK_AUTH_STATUS
+      if (message.action === "CHECK_AUTH_STATUS") {
+        const auth = await getCachedAuthStatus();
+        sendResponse({ success: true, auth });
+        return;
+      }
+
+      // Action: SYNC_AUTH_STATUS
+      if (message.action === "SYNC_AUTH_STATUS") {
+        if (message.auth) {
+          await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: message.auth });
+        }
+        sendResponse({ success: true });
+        return;
+      }
+
       // Action: UPDATE_VAULT_BADGE
       if (message.action === "UPDATE_VAULT_BADGE") {
         await updateVaultBadge();
@@ -395,6 +459,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Action: SEND_TO_LABELFLOW (1-Click Crop Selected)
       if (message.action === "SEND_TO_LABELFLOW") {
+        // 0. AUTH GATEKEEPER CHECK: User MUST be logged in on LabelFlow website
+        const auth = await getCachedAuthStatus();
+        if (!auth || !auth.isLoggedIn) {
+          // Open or focus login page on LabelFlow
+          await chrome.tabs.create({ url: LOGIN_URL });
+          sendResponse({
+            success: false,
+            needsLogin: true,
+            error: "🔒 Login Required (Free): Kripya LabelFlow par login karein. Account bilkul free hai!",
+          });
+          return;
+        }
+
         const selectedRecords = await VaultStorage.getSelectedVaultFilesWithBlobs();
         if (!selectedRecords || selectedRecords.length === 0) {
           sendResponse({ success: false, error: "No PDF files selected in the Vault." });
@@ -427,20 +504,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           })
         );
 
-        // 3. Find any open LabelFlow tab on localhost:3000
+        // 3. Find any open LabelFlow tab (Production domain or Localhost)
         const allTabs = await chrome.tabs.query({});
-        let targetTab = allTabs.find((t) => {
-          if (!t.url) return false;
-          try {
-            const u = new URL(t.url);
-            return (
-              (u.hostname === "localhost" || u.hostname === "127.0.0.1") &&
-              u.port === "3000"
-            );
-          } catch {
-            return false;
-          }
-        });
+        let targetTab = allTabs.find((t) => t.url && isLabelFlowUrl(t.url));
 
         if (targetTab && targetTab.id) {
           // Bring window to focus
@@ -448,14 +514,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await chrome.windows.update(targetTab.windowId, { focused: true });
           }
 
-          // Check if tab is currently on a different page (e.g. /meesho-label-cropper, /blogs, etc.)
-          let isDifferentPath = true;
+          // Check if tab is currently on a non-cropper page (e.g. /login, /blogs, etc.)
+          let isCropperPage = false;
           try {
             const currentU = new URL(targetTab.url);
-            isDifferentPath = currentU.pathname !== "/";
+            isCropperPage = currentU.pathname === "/" || currentU.pathname.includes("label-cropper");
           } catch {}
 
-          if (isDifferentPath) {
+          if (!isCropperPage) {
             // Navigate directly to the generator page!
             await chrome.tabs.update(targetTab.id, {
               url: GENERATOR_URL,
@@ -465,7 +531,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
-          // Tab is on http://localhost:3000/
+          // Tab is on LabelFlow cropper page
           await chrome.tabs.update(targetTab.id, { active: true });
 
           let delivered = false;

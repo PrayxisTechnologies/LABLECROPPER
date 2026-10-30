@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { QuickLabelSearchModal } from "@/components/QuickLabelSearchModal";
+import { ExtensionDownloadModal } from "@/components/ExtensionDownloadModal";
 
 interface HeaderProps {
   backendOnline?: boolean | null;
@@ -19,6 +20,7 @@ export const Header: React.FC<HeaderProps> = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [extensionModalOpen, setExtensionModalOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -211,6 +213,17 @@ export const Header: React.FC<HeaderProps> = () => {
             </Link>
           )}
 
+          {/* Extension Download Button */}
+          <button
+            type="button"
+            onClick={() => setExtensionModalOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all duration-150 bg-gradient-to-r from-cyan-500/10 to-indigo-500/10 border-cyan-400/40 dark:border-cyan-neon/30 text-cyan-600 dark:text-cyan-neon hover:bg-cyan-500/20 active:scale-95 shadow-sm cursor-pointer"
+            title="Download Chrome Extension (100% Free)"
+          >
+            <span className="text-sm">⚡</span>
+            <span className="hidden sm:inline">Extension</span>
+          </button>
+
           {/* Quick Search Button */}
           <button
             type="button"
@@ -325,12 +338,34 @@ export const Header: React.FC<HeaderProps> = () => {
               </Link>
             </div>
           )}
+
+          {/* Mobile Extension Download Link */}
+          <button
+            type="button"
+            onClick={() => {
+              setMobileMenuOpen(false);
+              setExtensionModalOpen(true);
+            }}
+            className="w-full text-left flex items-center justify-between px-3 py-2.5 text-xs font-bold text-cyan-600 dark:text-cyan-neon hover:bg-cyan-50 dark:hover:bg-navy-800 rounded-xl border border-cyan-400/30 dark:border-cyan-neon/30 mt-2 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center space-x-2">
+              <span>⚡</span>
+              <span>Download Chrome Extension</span>
+            </span>
+            <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon">Free</span>
+          </button>
         </div>
       )}
       {/* Quick Label Search Modal */}
       <QuickLabelSearchModal
         isOpen={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
+      />
+
+      {/* Chrome Extension Download Modal */}
+      <ExtensionDownloadModal
+        isOpen={extensionModalOpen}
+        onClose={() => setExtensionModalOpen(false)}
       />
     </header>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
+import { ExtensionDownloadModal } from "@/components/ExtensionDownloadModal";
 
 export interface VaultIncomingFile {
   id: string;
@@ -26,6 +27,7 @@ export const ExtensionSyncPanel: React.FC<ExtensionSyncPanelProps> = ({
   const [lastImportNames, setLastImportNames] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState<boolean>(false);
 
   const isImportingRef = useRef<boolean>(false);
 
@@ -183,8 +185,18 @@ export const ExtensionSyncPanel: React.FC<ExtensionSyncPanelProps> = ({
           </div>
         </div>
 
-        {/* Status Pills */}
+        {/* Status Pills & Download Extension Button */}
         <div className="flex items-center space-x-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-gradient-to-r from-cyan-500/20 via-indigo-500/20 to-purple-500/20 hover:from-cyan-500/35 hover:to-indigo-500/35 border border-cyan-400/50 text-cyan-300 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+            title="Download & Install Chrome Extension (100% Free)"
+          >
+            <span>⬇️</span>
+            <span>Download Extension</span>
+          </button>
+
           {isProcessing ? (
             <div className="flex items-center space-x-1.5 px-3 py-1 rounded-xl bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs font-semibold animate-pulse">
               <div className="w-2 h-2 rounded-full bg-cyan-400" />
@@ -216,6 +228,12 @@ export const ExtensionSyncPanel: React.FC<ExtensionSyncPanelProps> = ({
           <span>{errorMessage}</span>
         </div>
       )}
+
+      {/* Chrome Extension Download Modal */}
+      <ExtensionDownloadModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+      />
     </div>
   );
 };

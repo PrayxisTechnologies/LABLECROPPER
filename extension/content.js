@@ -5,18 +5,57 @@
 
 const TARGET_ORIGIN = window.location.origin;
 
+// 0. Extract current authentication state from LabelFlow website localStorage
+function getLocalAuthStatus() {
+  try {
+    const token = localStorage.getItem("labelflow_jwt_token");
+    const userRaw = localStorage.getItem("labelflow_user_profile");
+    let user = null;
+    if (userRaw) {
+      try {
+        user = JSON.parse(userRaw);
+      } catch {}
+    }
+    const isLoggedIn = Boolean(token && typeof token === "string" && token.trim().length > 10);
+    return {
+      isLoggedIn,
+      user: isLoggedIn ? user : null,
+      token: isLoggedIn ? token : null,
+      origin: window.location.origin,
+      updatedAt: Date.now(),
+    };
+  } catch {
+    return { isLoggedIn: false, user: null, token: null, origin: window.location.origin, updatedAt: Date.now() };
+  }
+}
+
+function syncAuthToExtension() {
+  const auth = getLocalAuthStatus();
+  try {
+    chrome.runtime.sendMessage({
+      action: "SYNC_AUTH_STATUS",
+      auth: auth,
+    });
+  } catch (err) {
+    // Service worker might be sleeping
+  }
+}
+
 // Announce extension presence to the LabelFlow webpage
 function broadcastExtensionReady() {
+  const auth = getLocalAuthStatus();
   window.postMessage(
     {
       source: "LABELFLOW_EXTENSION",
       type: "LABELFLOW_EXTENSION_STATUS",
       installed: true,
       vaultActive: true,
-      version: "2.0.0",
+      version: "2.1.0",
+      auth: auth,
     },
     "*"
   );
+  syncAuthToExtension();
 }
 
 // Check for pending vault import files queued by the extension
@@ -51,6 +90,11 @@ function checkAndDeliverPendingVaultImport() {
 
 // 1. Listen for background service worker live messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.type === "GET_AUTH_STATUS") {
+    sendResponse(getLocalAuthStatus());
+    return true;
+  }
+
   if (message && message.type === "IMPORT_VAULT_FILES") {
     console.log(
       "[LabelFlow Extension] Received live IMPORT_VAULT_FILES from background:",
@@ -92,6 +136,13 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", () => {
   broadcastExtensionReady();
   checkAndDeliverPendingVaultImport();
+});
+
+// Real-time synchronization when user logs in or out on the website
+window.addEventListener("storage", (e) => {
+  if (e.key === "labelflow_jwt_token" || e.key === "labelflow_user_profile") {
+    syncAuthToExtension();
+  }
 });
 
 // 4. Listen for messages from the LabelFlow webpage window

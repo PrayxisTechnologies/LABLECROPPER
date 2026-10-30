@@ -104,6 +104,51 @@ document.addEventListener("DOMContentLoaded", () => {
   const bannerIcon = document.getElementById("bannerIcon");
   const bannerCloseBtn = document.getElementById("bannerCloseBtn");
 
+  // Auth Gatekeeper Elements
+  const authBar = document.getElementById("authBar");
+  const authIcon = document.getElementById("authIcon");
+  const authText = document.getElementById("authText");
+  const authActionBtn = document.getElementById("authActionBtn");
+
+  let currentAuthState = { isLoggedIn: false, user: null };
+
+  const checkAuthStatus = async () => {
+    try {
+      chrome.runtime.sendMessage({ action: "CHECK_AUTH_STATUS" }, (res) => {
+        if (res && res.auth && res.auth.isLoggedIn) {
+          currentAuthState = res.auth;
+          if (authBar) {
+            authBar.className = "auth-bar logged-in";
+          }
+          if (authIcon) authIcon.textContent = "✓";
+          const uName = res.auth.user?.name || res.auth.user?.email || "Seller Account";
+          if (authText) authText.textContent = `Connected: ${uName}`;
+          if (authActionBtn) {
+            authActionBtn.textContent = "Dashboard";
+            authActionBtn.onclick = () => {
+              chrome.tabs.create({ url: "https://labelcropper.prayxis.in/dashboard" });
+            };
+          }
+        } else {
+          currentAuthState = { isLoggedIn: false, user: null };
+          if (authBar) {
+            authBar.className = "auth-bar logged-out";
+          }
+          if (authIcon) authIcon.textContent = "🔒";
+          if (authText) authText.textContent = "Login Required to Upload (Free)";
+          if (authActionBtn) {
+            authActionBtn.textContent = "Log In (Free)";
+            authActionBtn.onclick = () => {
+              chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
+            };
+          }
+        }
+      });
+    } catch (e) {
+      console.debug("Auth check failed:", e);
+    }
+  };
+
   // App State
   let currentTab = "scan"; // "scan" | "printed" | "trash"
   let readyVaultItems = [];
@@ -915,14 +960,21 @@ document.addEventListener("DOMContentLoaded", () => {
   if (homeLink) {
     homeLink.addEventListener("click", (e) => {
       e.preventDefault();
-      chrome.tabs.create({ url: "http://localhost:3000/#generator" });
+      chrome.tabs.create({ url: "https://labelcropper.prayxis.in/#generator" });
       window.close();
     });
   }
 
-  // Main CTA: Print / Crop Selected
+  // Main CTA: Print / Crop Selected with Login Rule Enforcement
   if (cropSelectedBtn) {
     cropSelectedBtn.addEventListener("click", () => {
+      // 1. Strict Gatekeeper: Must be logged in
+      if (!currentAuthState || !currentAuthState.isLoggedIn) {
+        showBanner("🔒 Login Required: PDF upload & auto-crop use karne ke liye pehle login karein (Free Account).", "error");
+        chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
+        return;
+      }
+
       const selected = readyVaultItems.filter((i) => i.selected);
       if (selected.length === 0) {
         showBanner("Please select at least 1 ready PDF label to print & crop.", "error");
@@ -940,6 +992,9 @@ document.addEventListener("DOMContentLoaded", () => {
             window.close();
           }, 700);
         } else {
+          if (response && response.needsLogin) {
+            checkAuthStatus();
+          }
           showBanner(response?.error || "Error transferring files to website.", "error");
           updateCtaButton();
         }
@@ -948,6 +1003,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Initial load
+  checkAuthStatus();
   triggerScan(true);
   fetchVaultData(false);
 });

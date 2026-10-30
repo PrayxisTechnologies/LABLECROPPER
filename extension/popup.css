@@ -163,6 +163,78 @@ body {
   box-shadow: 0 0 6px #10B981;
 }
 
+/* Auth Status / Gatekeeper Bar */
+.auth-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.2s ease;
+}
+
+.auth-bar.logged-out {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.18) 0%, rgba(239, 68, 68, 0.18) 100%);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.4);
+  color: #FDE68A;
+}
+
+.auth-bar.logged-in {
+  background: rgba(16, 185, 129, 0.12);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.35);
+  color: #6EE7B7;
+}
+
+.auth-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-icon {
+  font-size: 11px;
+}
+
+.auth-text {
+  font-size: 10px;
+  letter-spacing: 0.1px;
+}
+
+.auth-btn {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  background: #F59E0B;
+  color: #000;
+}
+
+.auth-btn:hover {
+  background: #FBBF24;
+  transform: translateY(-0.5px);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+.auth-bar.logged-in .auth-btn {
+  background: rgba(16, 185, 129, 0.2);
+  color: #A7F3D0;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.auth-bar.logged-in .auth-btn:hover {
+  background: rgba(16, 185, 129, 0.35);
+  color: #FFFFFF;
+}
+
 /* Vault Navigation Tabs */
 .vault-tabs {
   display: flex;

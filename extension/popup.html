@@ -34,6 +34,15 @@
       </div>
     </header>
 
+    <!-- Auth Status / Gatekeeper Bar -->
+    <div class="auth-bar logged-out" id="authBar">
+      <div class="auth-info" id="authInfo">
+        <span class="auth-icon" id="authIcon">🔒</span>
+        <span class="auth-text" id="authText">Login Required to Crop & Upload (100% Free)</span>
+      </div>
+      <button type="button" class="auth-btn" id="authActionBtn">Log In (Free)</button>
+    </div>
+
     <!-- Hidden Native File Inputs -->
     <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" multiple style="display: none;" />
     <input type="file" id="singleFileInput" accept="application/pdf,.pdf" style="display: none;" />
@@ -257,7 +266,7 @@
         <span class="btn-text" id="cropBtnText">PRINT / CROP SELECTED (0)</span>
       </button>
       <div class="footer-note">
-        <span>Files transfer directly into LabelFlow website on <a href="http://localhost:3000/#generator" target="_blank" id="homeLink">localhost:3000</a></span>
+        <span>Files transfer directly into LabelFlow website on <a href="https://labelcropper.prayxis.in/#generator" target="_blank" id="homeLink">labelcropper.prayxis.in</a></span>
       </div>
     </footer>
   </div>

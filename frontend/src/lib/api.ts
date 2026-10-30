@@ -43,6 +43,10 @@ export function getApiBaseUrl(): string {
   return "https://lablecropper.onrender.com/api/v1";
 }
 
+export function getExtensionDownloadUrl(): string {
+  return `${getApiBaseUrl()}/extension/download`;
+}
+
 /**
  * Check backend health and phase capabilities.
  */

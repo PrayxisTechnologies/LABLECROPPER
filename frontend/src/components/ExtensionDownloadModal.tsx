@@ -1,0 +1,176 @@
+"use client";
+
+import React, { useEffect } from "react";
+import { getExtensionDownloadUrl } from "@/lib/api";
+
+interface ExtensionDownloadModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
+  isOpen,
+  onClose,
+}) => {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    if (isOpen) {
+      document.body.style.overflow = "hidden";
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      document.body.style.overflow = "unset";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const downloadUrl = getExtensionDownloadUrl();
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
+      <div
+        className="relative w-full max-w-xl rounded-2xl border border-cyan-400/40 dark:border-cyan-neon/30 bg-white dark:bg-[#07111F] p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Close Button */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-navy-800 transition-colors cursor-pointer"
+          aria-label="Close extension modal"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+
+        {/* Header with Chrome Icon & Branding */}
+        <div className="flex items-start space-x-3.5 pr-8">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-purple-600 p-0.5 shadow-[0_0_15px_rgba(0,209,255,0.4)] shrink-0 flex items-center justify-center text-white">
+            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
+            </svg>
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <h2 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">
+                LabelFlow Chrome Extension
+              </h2>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                100% Free
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-snug">
+              Meesho, Flipkart, Snapdeal, Amazon &amp; Myntra se label download hote hi automatically detect karein aur 1-click me thermal 4×6 crop karein.
+            </p>
+          </div>
+        </div>
+
+        {/* Big Action: Download ZIP */}
+        <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-500/10 via-indigo-500/10 to-purple-500/10 border border-cyan-400/40 dark:border-cyan-neon/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-inner">
+          <div>
+            <span className="text-xs font-bold text-slate-900 dark:text-white block">
+              Package: LabelFlow-Chrome-Extension.zip
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Version 2.1.0 • Manifest V3 • Zero Setup Fee
+            </span>
+          </div>
+
+          <a
+            href={downloadUrl}
+            download="LabelFlow-Chrome-Extension.zip"
+            className="inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-cyan-500 via-indigo-600 to-cyan-400 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>⬇️ Download Extension (.ZIP)</span>
+          </a>
+        </div>
+
+        {/* 3-Step Simple Install Guide */}
+        <div className="space-y-3">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-cyan-neon block">
+            Install Kaise Karein (Sirf 1 Minute)
+          </span>
+
+          <div className="grid grid-cols-1 gap-2.5">
+            {/* Step 1 */}
+            <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
+              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+                1
+              </span>
+              <div>
+                <span className="font-bold text-slate-900 dark:text-white block">
+                  ZIP File ko Extract (Unzip) karein
+                </span>
+                <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
+                  Downloaded <code className="text-cyan-600 dark:text-cyan-neon font-bold">LabelFlow-Chrome-Extension.zip</code> par right-click karein aur <strong>Extract All...</strong> select karein.
+                </span>
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
+              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+                2
+              </span>
+              <div>
+                <span className="font-bold text-slate-900 dark:text-white block">
+                  Chrome me Developer Mode ON karein
+                </span>
+                <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
+                  Google Chrome me new tab kholein, <code className="text-cyan-600 dark:text-cyan-neon font-bold">chrome://extensions</code> par jayein aur top-right me <strong>Developer mode toggle ON</strong> karein.
+                </span>
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div className="flex items-start space-x-3 p-3 rounded-xl bg-slate-50 dark:bg-navy-900/60 border border-slate-200 dark:border-navy-800 text-xs">
+              <span className="w-6 h-6 rounded-full bg-cyan-100 dark:bg-cyan-neon/20 text-cyan-700 dark:text-cyan-neon font-black flex items-center justify-center shrink-0">
+                3
+              </span>
+              <div>
+                <span className="font-bold text-slate-900 dark:text-white block">
+                  &quot;Load unpacked&quot; dabakar folder select karein
+                </span>
+                <span className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed block mt-0.5">
+                  Top-left me <strong>Load unpacked</strong> button par click karein aur apna unzipped folder select kar lein. Extension activate ho jayegi!
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Notice on Free Login Rule */}
+        <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 text-xs flex items-center space-x-2.5">
+          <span className="text-base shrink-0">🔒</span>
+          <p className="text-[11px] text-amber-900 dark:text-amber-200 leading-snug">
+            <strong>Important Rule:</strong> Extension se shipping label PDFs send karne ke liye LabelFlow website par aapka <strong>Free Account Login</strong> hona zaroori hai. Account bilkul 100% Free hai!
+          </p>
+        </div>
+
+        {/* Footer actions */}
+        <div className="flex items-center justify-end space-x-2.5 pt-2 border-t border-slate-200 dark:border-navy-800">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-navy-800 hover:bg-slate-200 dark:hover:bg-navy-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
