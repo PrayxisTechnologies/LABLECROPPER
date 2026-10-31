@@ -8,6 +8,10 @@ importScripts("vault-storage.js");
 const PENDING_VAULT_IMPORT_KEY = "labelflow_pending_vault_import";
 const AUTH_STORAGE_KEY = "labelflow_auth_state";
 
+// Lightning-Fast In-Memory Cache for Zero-Latency Page Handoff
+let memoryVaultPayloads = null;
+let memoryVaultTimestamp = 0;
+
 // Primary Production Domain and Fallbacks
 const PRIMARY_DOMAIN = "https://labelcropper.prayxis.in";
 const GENERATOR_URL = "https://labelcropper.prayxis.in/#generator";
@@ -59,6 +63,39 @@ async function getCachedAuthStatus() {
     for (const t of allTabs) {
       if (t.id && isLabelFlowUrl(t.url)) {
         try {
+          if (chrome.scripting && chrome.scripting.executeScript) {
+            const results = await chrome.scripting.executeScript({
+              target: { tabId: t.id },
+              func: () => {
+                try {
+                  const token =
+                    localStorage.getItem("labelflow_jwt_token") ||
+                    localStorage.getItem("labelflow_token");
+                  const userStr = localStorage.getItem("labelflow_user_profile");
+                  let user = null;
+                  if (userStr) {
+                    try {
+                      user = JSON.parse(userStr);
+                    } catch {}
+                  }
+                  return { token, user };
+                } catch {
+                  return null;
+                }
+              },
+            });
+            if (results && results[0] && results[0].result && results[0].result.token) {
+              const liveAuth = {
+                isLoggedIn: true,
+                user: results[0].result.user || { name: "Seller Account" },
+                token: results[0].result.token,
+                updatedAt: Date.now(),
+              };
+              await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: liveAuth });
+              return liveAuth;
+            }
+          }
+
           const liveAuth = await chrome.tabs.sendMessage(t.id, { type: "GET_AUTH_STATUS" });
           if (liveAuth && liveAuth.isLoggedIn) {
             await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: liveAuth });
@@ -95,14 +132,20 @@ async function blobToBase64(blob) {
   return btoa(binary);
 }
 
-// Update extension icon badge
-async function updateVaultBadge() {
+// Update extension icon badge: strictly reflects pending unprinted labels!
+async function updateVaultBadge(customCount = null) {
   try {
-    const stats = await VaultStorage.getVaultStats();
-    const count = stats.selectedCount > 0 ? stats.selectedCount : stats.readyCount;
+    let count = 0;
+    if (typeof customCount === "number") {
+      count = customCount;
+    } else {
+      const stats = await VaultStorage.getVaultStats();
+      count = stats.readyCount;
+    }
     const text = count > 0 ? String(count) : "";
     await chrome.action.setBadgeText({ text });
-    await chrome.action.setBadgeBackgroundColor({ color: "#00D1FF" });
+    // Vibrant eye-catching pop color for pending labels!
+    await chrome.action.setBadgeBackgroundColor({ color: count > 0 ? "#EF4444" : "#00D1FF" });
   } catch (err) {
     console.warn("Could not update vault badge:", err);
   }
@@ -128,6 +171,18 @@ async function handleCompletedDownload(downloadId) {
     }
 
     if (item.state !== "complete") return;
+
+    // Do not auto-ingest files that have already been printed
+    try {
+      const printedFiles = await VaultStorage.getPrintedVaultFiles();
+      const cleanLower = filename.toLowerCase().trim();
+      const alreadyPrinted = (printedFiles || []).some(
+        (p) =>
+          (p.name && p.name.toLowerCase().trim() === cleanLower) ||
+          (p.filename && p.filename.toLowerCase().trim() === cleanLower)
+      );
+      if (alreadyPrinted) return;
+    } catch {}
 
     // Strict marketplace classification
     const classification = VaultStorage.classifyDownloadItem(item);
@@ -189,11 +244,14 @@ async function autoIngestEligibleDownloads() {
 
     const storedFiles = await VaultStorage.getStoredVaultFiles(false);
     const trashFiles = await VaultStorage.getTrashVaultFiles();
+    const printedFiles = await VaultStorage.getPrintedVaultFiles();
 
     const storedIds = new Set(storedFiles.map((s) => String(s.downloadId)));
     const storedNames = new Set(storedFiles.map((s) => s.name.toLowerCase().trim()));
     const trashIds = new Set(trashFiles.map((t) => String(t.downloadId)));
     const trashNames = new Set(trashFiles.map((t) => t.name.toLowerCase().trim()));
+    const printedIds = new Set((printedFiles || []).map((p) => String(p.downloadId)));
+    const printedNames = new Set((printedFiles || []).map((p) => p.name.toLowerCase().trim()));
 
     for (const item of items) {
       const filename = getBasename(item.filename || item.url);
@@ -204,7 +262,9 @@ async function autoIngestEligibleDownloads() {
         storedIds.has(idStr) ||
         storedNames.has(nameLower) ||
         trashIds.has(idStr) ||
-        trashNames.has(nameLower)
+        trashNames.has(nameLower) ||
+        printedIds.has(idStr) ||
+        printedNames.has(nameLower)
       ) {
         continue;
       }
@@ -278,7 +338,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await updateVaultBadge();
+  await syncBackgroundCloudVault();
 });
+
+// Periodic background badge refresh
+async function syncBackgroundCloudVault() {
+  try {
+    await updateVaultBadge();
+  } catch {}
+}
+
+setInterval(() => {
+  syncBackgroundCloudVault();
+}, 30000);
 
 // 2. Chrome runtime messaging dispatcher
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -423,23 +495,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Action: UPDATE_VAULT_BADGE
       if (message.action === "UPDATE_VAULT_BADGE") {
-        await updateVaultBadge();
+        await updateVaultBadge(message.count);
         sendResponse({ success: true });
         return;
       }
 
       // Action: CHECK_PENDING_VAULT_IMPORT (Called by content script on page load / sync)
       if (message.action === "CHECK_PENDING_VAULT_IMPORT") {
+        // Fast-path: deliver cached in-memory payload instantly (< 1ms)!
+        if (memoryVaultPayloads && memoryVaultPayloads.length > 0 && Date.now() - memoryVaultTimestamp < 120000) {
+          sendResponse({ success: true, pendingImport: { files: memoryVaultPayloads } });
+          return;
+        }
+
         const stored = await chrome.storage.local.get(PENDING_VAULT_IMPORT_KEY);
         const importData = stored[PENDING_VAULT_IMPORT_KEY];
-        if (importData && importData.fileIds && importData.fileIds.length > 0) {
-          if (Date.now() - (importData.timestamp || 0) < 180000) {
+        if (importData && Date.now() - (importData.timestamp || 0) < 180000) {
+          if (Array.isArray(importData.files) && importData.files.length > 0) {
+            sendResponse({ success: true, pendingImport: { files: importData.files } });
+            return;
+          }
+          if (importData.fileIds && importData.fileIds.length > 0) {
             const matchedRecords = await VaultStorage.getVaultFilesWithBlobsByIds(importData.fileIds);
             const filePayloads = await Promise.all(
               matchedRecords.map(async (rec) => {
                 let base64 = rec.base64;
                 if (!base64 && rec.blob) {
                   base64 = await blobToBase64(rec.blob);
+                } else if (!base64 && rec.buffer) {
+                  base64 = await blobToBase64(new Blob([rec.buffer]));
                 }
                 return {
                   id: rec.id,
@@ -455,16 +539,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               sendResponse({ success: true, pendingImport: { files: filePayloads } });
               return;
             }
-          } else {
-            await chrome.storage.local.remove(PENDING_VAULT_IMPORT_KEY);
           }
         }
         sendResponse({ success: true, pendingImport: null });
         return;
       }
 
+      // Action: VAULT_IMPORT_ACKNOWLEDGED (Webpage confirmed receipt of imported files)
+      if (message.action === "VAULT_IMPORT_ACKNOWLEDGED") {
+        memoryVaultPayloads = null;
+        await chrome.storage.local.remove(PENDING_VAULT_IMPORT_KEY);
+        sendResponse({ success: true });
+        return;
+      }
+
+      // Action: RECORD_PROCESSED_JOB (Live crop job finished on website -> archive with rich metadata)
+      if (message.action === "RECORD_PROCESSED_JOB") {
+        memoryVaultPayloads = null;
+        await chrome.storage.local.remove(PENDING_VAULT_IMPORT_KEY);
+        await VaultStorage.recordProcessedJob(
+          message.historyItem,
+          message.filenames || [],
+          message.fileIds || []
+        );
+        await updateVaultBadge();
+        try {
+          chrome.runtime.sendMessage({ action: "VAULT_DATA_CHANGED" });
+        } catch {}
+        sendResponse({ success: true });
+        return;
+      }
+
+      // Action: SYNC_LOCAL_HISTORY (Sync 48h history from website localStorage)
+      if (message.action === "SYNC_LOCAL_HISTORY") {
+        if (Array.isArray(message.items)) {
+          await VaultStorage.syncLocalHistoryItems(message.items);
+          await updateVaultBadge();
+        }
+        sendResponse({ success: true });
+        return;
+      }
+
       // Action: MARK_PROCESSED_TO_TRASH (Website reports success -> move files to PRINTED section and clear pending)
       if (message.action === "MARK_PROCESSED_TO_TRASH") {
+        memoryVaultPayloads = null;
         await chrome.storage.local.remove(PENDING_VAULT_IMPORT_KEY);
         if (message.ids && message.ids.length > 0) {
           await VaultStorage.moveVaultFilesToPrinted(message.ids);
@@ -489,41 +607,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        const selectedRecords = await VaultStorage.getSelectedVaultFilesWithBlobs();
-        if (!selectedRecords || selectedRecords.length === 0) {
+        let filePayloads = [];
+
+        // Preference 1: Direct payloads passed from popup (guaranteed binary)
+        if (Array.isArray(message.filePayloads) && message.filePayloads.length > 0) {
+          filePayloads = message.filePayloads.filter((f) => f && f.base64 && f.base64.length > 20);
+        }
+
+        // Preference 2: Fallback query from IndexedDB
+        if (filePayloads.length === 0) {
+          const selectedRecords = await VaultStorage.getSelectedVaultFilesWithBlobs();
+          if (selectedRecords && selectedRecords.length > 0) {
+            filePayloads = await Promise.all(
+              selectedRecords.map(async (rec) => {
+                let base64 = rec.base64;
+                if (!base64 && rec.blob) {
+                  base64 = await blobToBase64(rec.blob);
+                } else if (!base64 && rec.buffer) {
+                  base64 = await blobToBase64(new Blob([rec.buffer]));
+                }
+                return {
+                  id: rec.id,
+                  name: rec.name,
+                  size: rec.size,
+                  type: rec.type || "application/pdf",
+                  platform: rec.platform,
+                  base64: base64,
+                };
+              })
+            );
+            filePayloads = filePayloads.filter((f) => f && f.base64 && f.base64.length > 20);
+          }
+        }
+
+        if (!filePayloads || filePayloads.length === 0) {
           sendResponse({ success: false, error: "No PDF files selected in the Vault." });
           return;
         }
 
-        // 1. Store JSON-serializable IDs in chrome.storage.local
+        // 1. Store in memory and chrome.storage.local
+        memoryVaultPayloads = filePayloads;
+        memoryVaultTimestamp = Date.now();
+
         await chrome.storage.local.set({
           [PENDING_VAULT_IMPORT_KEY]: {
-            fileIds: selectedRecords.map((r) => r.id),
+            files: filePayloads,
+            fileIds: filePayloads.map((r) => r.id),
             timestamp: Date.now(),
           },
         });
 
-        // 2. Prepare JSON-safe Base64 payloads
-        const filePayloads = await Promise.all(
-          selectedRecords.map(async (rec) => {
-            let base64 = rec.base64;
-            if (!base64 && rec.blob) {
-              base64 = await blobToBase64(rec.blob);
-            }
-            return {
-              id: rec.id,
-              name: rec.name,
-              size: rec.size,
-              type: rec.type || "application/pdf",
-              platform: rec.platform,
-              base64: base64,
-            };
-          })
-        );
-
         // 3. Find any open LabelFlow tab (Production domain or Localhost)
         const allTabs = await chrome.tabs.query({});
-        let targetTab = allTabs.find((t) => t.url && isLabelFlowUrl(t.url));
+        // Prefer active tab if on LabelFlow
+        let targetTab = allTabs.find((t) => t.active && isLabelFlowUrl(t.url));
+        if (!targetTab) {
+          // Prefer any tab currently on a cropper page
+          targetTab = allTabs.find((t) => {
+            if (!t.url || !isLabelFlowUrl(t.url)) return false;
+            try {
+              const u = new URL(t.url);
+              return (
+                u.pathname === "/" ||
+                u.pathname.includes("label-cropper") ||
+                u.pathname.includes("crop-labels") ||
+                u.hash.includes("generator")
+              );
+            } catch {
+              return false;
+            }
+          });
+        }
+        if (!targetTab) {
+          targetTab = allTabs.find((t) => t.url && isLabelFlowUrl(t.url));
+        }
 
         if (targetTab && targetTab.id) {
           // Bring window to focus
@@ -531,17 +688,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await chrome.windows.update(targetTab.windowId, { focused: true });
           }
 
-          // Check if tab is currently on a non-cropper page (e.g. /login, /blogs, etc.)
+          // Check if tab is currently on a non-cropper page (e.g. /login, /blogs, /dashboard, etc.)
           let isCropperPage = false;
+          let targetOrigin = PRIMARY_DOMAIN;
           try {
             const currentU = new URL(targetTab.url);
-            isCropperPage = currentU.pathname === "/" || currentU.pathname.includes("label-cropper");
+            targetOrigin = currentU.origin;
+            isCropperPage =
+              currentU.pathname === "/" ||
+              currentU.pathname.includes("label-cropper") ||
+              currentU.pathname.includes("crop-labels") ||
+              currentU.hash.includes("generator");
           } catch {}
 
           if (!isCropperPage) {
-            // Navigate directly to the generator page!
+            // Navigate directly to the cropper page on the active origin
+            const targetUrl = targetOrigin.includes("localhost")
+              ? `${targetOrigin}/meesho-label-cropper`
+              : `${targetOrigin}/#generator`;
             await chrome.tabs.update(targetTab.id, {
-              url: GENERATOR_URL,
+              url: targetUrl,
               active: true,
             });
             sendResponse({ success: true, count: filePayloads.length, navigated: true });

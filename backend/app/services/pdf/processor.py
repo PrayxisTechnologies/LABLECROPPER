@@ -829,6 +829,7 @@ class PDFBatchProcessor:
                 json.dump(candidate_labels_serializable, f)
 
             # 12. Persist processing job & Master Sheet in Background Task (Never blocks HTTP response)
+            orig_filenames = [f.filename for f in files if f.filename]
             if user_id:
                 asyncio.create_task(
                     self._persist_job_and_master_sheet_background(
@@ -846,6 +847,7 @@ class PDFBatchProcessor:
                         downloads=downloads,
                         ambiguous_labels=ambiguous_labels,
                         sorted_labels=sorted_labels,
+                        original_filenames=orig_filenames,
                     )
                 )
 
@@ -883,6 +885,7 @@ class PDFBatchProcessor:
         downloads: Any,
         ambiguous_labels: List[Any],
         sorted_labels: List[Dict[str, Any]],
+        original_filenames: Optional[List[str]] = None,
     ) -> None:
         """Background asynchronous persistence for MongoDB job history and Master Sheet recording."""
         try:
@@ -902,7 +905,24 @@ class PDFBatchProcessor:
                     "main_skus": [m.model_dump() if hasattr(m, "model_dump") else m for m in main_skus],
                     "downloads": downloads.model_dump() if hasattr(downloads, "model_dump") else downloads,
                     "has_ambiguity": len(ambiguous_labels) > 0,
+                    "original_filenames": original_filenames or [],
                 })
+
+                # Mark any matching cloud queue files as printed!
+                if original_filenames:
+                    await db.cloud_label_queue.update_many(
+                        {
+                            "user_id": user_id,
+                            "filename": {"$in": original_filenames},
+                        },
+                        {
+                            "$set": {
+                                "status": "printed",
+                                "printed_at": created_at,
+                                "job_id": job_id,
+                            }
+                        },
+                    )
 
                 now_utc = datetime.now(timezone.utc)
                 for m in main_skus:

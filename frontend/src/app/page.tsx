@@ -192,6 +192,20 @@ export default function HomePage() {
       saveLocalProcessingItem(historyItem);
       setLocalHistory(getLocalProcessingHistory());
 
+      // Broadcast live processing success & history to Chrome Extension
+      if (typeof window !== "undefined") {
+        window.postMessage(
+          {
+            source: "LABELFLOW_WEBSITE",
+            type: "LABELFLOW_PROCESSING_SUCCESS",
+            job_id: response.job_id,
+            historyItem: historyItem,
+            filenames: rawFiles.map((f) => f.name),
+          },
+          window.location.origin
+        );
+      }
+
       if (response.total_input_pages > 0) {
         setFiles((prev) =>
           prev.map((f) => ({ ...f, pageCount: response.total_input_pages }))
@@ -347,7 +361,7 @@ export default function HomePage() {
               window.postMessage(
                 {
                   source: "LABELFLOW_WEBSITE",
-                  type: "LABELFLOW_PROCESSING_SUCCESS",
+                  type: "LABELFLOW_VAULT_IMPORT_RECEIVED",
                   fileIds: fileIds,
                 },
                 window.location.origin

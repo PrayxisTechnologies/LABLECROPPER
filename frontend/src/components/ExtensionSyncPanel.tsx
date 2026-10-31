@@ -72,20 +72,20 @@ export const ExtensionSyncPanel: React.FC<ExtensionSyncPanelProps> = ({
           const reconstructedFiles: File[] = incomingFiles.map((item) => {
             let blob: Blob;
 
-            if (item.base64 && typeof item.base64 === "string") {
+            if (
+              item.buffer &&
+              (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))
+            ) {
+              blob = new Blob([item.buffer], {
+                type: item.type || "application/pdf",
+              });
+            } else if (item.base64 && typeof item.base64 === "string") {
               const binaryString = atob(item.base64);
               const bytes = new Uint8Array(binaryString.length);
               for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
               }
               blob = new Blob([bytes], {
-                type: item.type || "application/pdf",
-              });
-            } else if (
-              item.buffer &&
-              (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))
-            ) {
-              blob = new Blob([item.buffer], {
                 type: item.type || "application/pdf",
               });
             } else {
@@ -114,13 +114,13 @@ export const ExtensionSyncPanel: React.FC<ExtensionSyncPanelProps> = ({
           // Pass real File[] directly to React upload handler
           onImportFiles(reconstructedFiles);
 
-          // Notify extension to move these processed files to Trash in the vault
+          // Acknowledge receipt of files to extension
           const fileIds = incomingFiles.map((i) => i.id).filter(Boolean);
           if (fileIds.length > 0) {
             window.postMessage(
               {
                 source: "LABELFLOW_WEBSITE",
-                type: "LABELFLOW_PROCESSING_SUCCESS",
+                type: "LABELFLOW_VAULT_IMPORT_RECEIVED",
                 fileIds: fileIds,
               },
               window.location.origin

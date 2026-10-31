@@ -198,6 +198,22 @@ async def _create_indexes(db: Any) -> None:
             name="idx_jobs_job_id_unique",
         )
 
+        # Cloud Label Queue Collection: user + status + uploaded_at, file_id unique, 48h TTL cleanup
+        await db.cloud_label_queue.create_index(
+            [("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING), ("uploaded_at", pymongo.DESCENDING)],
+            name="idx_cloud_queue_user_status_uploaded",
+        )
+        await db.cloud_label_queue.create_index(
+            [("file_id", pymongo.ASCENDING)],
+            unique=True,
+            name="idx_cloud_queue_file_id_unique",
+        )
+        await db.cloud_label_queue.create_index(
+            [("expires_at", pymongo.ASCENDING)],
+            expireAfterSeconds=0,
+            name="idx_cloud_queue_ttl_expires_at",
+        )
+
         logger.info("MongoDB indexes verified/created successfully.")
     except Exception as e:
         logger.warning("Notice while creating MongoDB indexes: %s", str(e))

@@ -230,6 +230,8 @@ function classifyDownloadItem(item) {
 
   const isFlipkartPattern =
     lowerName.includes("dispatch_labels") ||
+    lowerName.includes("invoice_labels") ||
+    lowerName.includes("invoicelabels") ||
     lowerName.includes("flipkart_label") ||
     lowerName.includes("flipkart-label") ||
     lowerName.includes("flipkartlabel") ||
@@ -516,7 +518,7 @@ async function getStoredVaultFiles(includeBlobs = false) {
 }
 
 /**
- * Retrieve all printed PDFs from the Vault.
+ * Retrieve all printed PDFs from the Vault (Processed History).
  */
 async function getPrintedVaultFiles() {
   const db = await openVaultDB();
@@ -529,19 +531,31 @@ async function getPrintedVaultFiles() {
       const all = request.result || [];
       const printed = all
         .filter((r) => r.status === "printed")
-        .sort((a, b) => (b.printedAt || 0) - (a.printedAt || 0))
+        .sort((a, b) => (b.printedAt || b.created_at || 0) - (a.printedAt || a.created_at || 0))
         .map((r) => ({
           id: r.id,
+          job_id: r.job_id || r.id,
           downloadId: r.downloadId,
           fingerprint: r.fingerprint,
-          name: r.name,
-          size: r.size,
-          type: r.type,
-          platform: r.platform,
+          name: r.filename || r.name,
+          filename: r.filename || r.name,
+          original_files: r.original_files || [r.name],
+          total_labels: r.total_labels || 0,
+          total_files: r.total_files || (r.original_files ? r.original_files.length : 1),
+          formatted_size: r.formatted_size || "Thermal 4×6",
+          type_badge: r.type_badge || "Label Only",
+          download_url: r.download_url || null,
+          view_url: r.view_url || null,
+          size: r.size || 0,
+          type: r.type || "application/pdf",
+          platform: r.marketplace || r.platform || "Meesho",
+          marketplace: r.marketplace || r.platform || "Meesho",
           dateAdded: r.dateAdded,
           status: r.status,
-          printedAt: r.printedAt,
+          printedAt: r.printedAt || r.created_at || Date.now(),
+          created_at: r.created_at || r.printedAt || Date.now(),
           hasBlob: Boolean(r.blob || r.buffer || r.base64),
+          selected: Boolean(r.selected),
         }));
       resolve(printed);
     };
@@ -597,6 +611,11 @@ async function updateVaultSelection(id, selected) {
       const record = getReq.result;
       if (record) {
         record.selected = Boolean(selected);
+        if (selected && record.status !== "ready") {
+          record.status = "ready";
+          record.trashedAt = null;
+          record.printedAt = null;
+        }
         store.put(record);
       }
     };
@@ -631,11 +650,28 @@ async function setAllVaultSelection(selected) {
 
 /**
  * Move specified files to Printed section after processing.
+ * Accepts IDs, strings, or { id, name } objects.
  */
-async function moveVaultFilesToPrinted(ids) {
-  if (!ids || ids.length === 0) return true;
+async function moveVaultFilesToPrinted(idsOrNames) {
+  if (!idsOrNames || idsOrNames.length === 0) return true;
   const db = await openVaultDB();
-  const idSet = new Set(Array.isArray(ids) ? ids : [ids]);
+  const list = Array.isArray(idsOrNames) ? idsOrNames : [idsOrNames];
+  const idSet = new Set();
+  const nameSet = new Set();
+
+  for (const it of list) {
+    if (typeof it === "string") {
+      idSet.add(it);
+      nameSet.add(it.toLowerCase().trim());
+      nameSet.add(getBasename(it).toLowerCase().trim());
+    } else if (it && typeof it === "object") {
+      if (it.id) idSet.add(it.id);
+      if (it.name) {
+        nameSet.add(it.name.toLowerCase().trim());
+        nameSet.add(getBasename(it.name).toLowerCase().trim());
+      }
+    }
+  }
 
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -645,7 +681,15 @@ async function moveVaultFilesToPrinted(ids) {
     getReq.onsuccess = () => {
       const all = getReq.result || [];
       for (const record of all) {
-        if (idSet.has(record.id)) {
+        const recName = record.name ? record.name.toLowerCase().trim() : "";
+        const recBase = getBasename(recName);
+        const matches =
+          idSet.has(record.id) ||
+          idSet.has(record.job_id) ||
+          (recName && nameSet.has(recName)) ||
+          (recBase && nameSet.has(recBase));
+
+        if (matches) {
           record.status = "printed";
           record.selected = false;
           record.printedAt = Date.now();
@@ -653,6 +697,132 @@ async function moveVaultFilesToPrinted(ids) {
         }
       }
     };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Record a completed label crop job directly into vault storage.
+ * Marks source files as printed and saves rich processing history item.
+ */
+async function recordProcessedJob(historyItem, filenames = [], fileIds = []) {
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const getReq = store.getAll();
+
+    getReq.onsuccess = () => {
+      const all = getReq.result || [];
+      const targetFilenames = new Set(
+        (filenames || []).map((f) => getBasename(f).toLowerCase().trim())
+      );
+      if (historyItem && Array.isArray(historyItem.original_files)) {
+        for (const orig of historyItem.original_files) {
+          targetFilenames.add(getBasename(orig).toLowerCase().trim());
+        }
+      }
+      const targetIds = new Set(fileIds || []);
+
+      // 1. Mark existing ready records matching these files/IDs as printed
+      for (const rec of all) {
+        const recBase = getBasename(rec.name || "").toLowerCase().trim();
+        if (targetIds.has(rec.id) || (recBase && targetFilenames.has(recBase))) {
+          rec.status = "printed";
+          rec.selected = false;
+          rec.printedAt = Date.now();
+          if (historyItem) {
+            rec.job_id = historyItem.job_id;
+            rec.filename = historyItem.filename;
+            rec.total_labels = historyItem.total_labels;
+            rec.download_url = historyItem.download_url;
+            rec.view_url = historyItem.view_url;
+            rec.type_badge = historyItem.type_badge;
+            rec.formatted_size = historyItem.formatted_size;
+          }
+          store.put(rec);
+        }
+      }
+
+      // 2. If historyItem was provided, also save/upsert a history card entry
+      if (historyItem && historyItem.job_id) {
+        const existingJob = all.find(
+          (r) => r.job_id === historyItem.job_id || r.id === historyItem.job_id
+        );
+        if (!existingJob) {
+          const entry = {
+            id: historyItem.job_id,
+            job_id: historyItem.job_id,
+            name: historyItem.filename,
+            filename: historyItem.filename,
+            original_files: historyItem.original_files || Array.from(targetFilenames),
+            total_labels: historyItem.total_labels || 0,
+            total_files: historyItem.total_files || 1,
+            formatted_size: historyItem.formatted_size || "Thermal 4×6",
+            marketplace: historyItem.marketplace || "Meesho",
+            type_badge: historyItem.type_badge || "Label Only",
+            download_url: historyItem.download_url,
+            view_url: historyItem.view_url,
+            status: "printed",
+            selected: false,
+            dateAdded: historyItem.created_at || Date.now(),
+            printedAt: historyItem.created_at || Date.now(),
+            created_at: historyItem.created_at || Date.now(),
+          };
+          store.put(entry);
+        }
+      }
+    };
+
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Synchronize all 48h history items from website localStorage into extension Vault.
+ */
+async function syncLocalHistoryItems(items) {
+  if (!items || !Array.isArray(items) || items.length === 0) return true;
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const getReq = store.getAll();
+
+    getReq.onsuccess = () => {
+      const all = getReq.result || [];
+      const existingJobIds = new Set(all.map((r) => r.job_id || r.id));
+
+      for (const item of items) {
+        if (!item || !item.job_id) continue;
+        if (!existingJobIds.has(item.job_id)) {
+          const entry = {
+            id: item.job_id,
+            job_id: item.job_id,
+            name: item.filename,
+            filename: item.filename,
+            original_files: item.original_files || [],
+            total_labels: item.total_labels || 0,
+            total_files: item.total_files || 1,
+            formatted_size: item.formatted_size || "Thermal 4×6",
+            marketplace: item.marketplace || "Meesho",
+            type_badge: item.type_badge || "Label Only",
+            download_url: item.download_url,
+            view_url: item.view_url,
+            status: "printed",
+            selected: false,
+            dateAdded: item.created_at || Date.now(),
+            printedAt: item.created_at || Date.now(),
+            created_at: item.created_at || Date.now(),
+          };
+          store.put(entry);
+          existingJobIds.add(item.job_id);
+        }
+      }
+    };
+
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
   });
@@ -674,10 +844,11 @@ async function reprintVaultFiles(ids) {
     getReq.onsuccess = () => {
       const all = getReq.result || [];
       for (const record of all) {
-        if (idSet.has(record.id)) {
+        if (idSet.has(record.id) || (record.job_id && idSet.has(record.job_id))) {
           record.status = "ready";
           record.selected = true;
           record.printedAt = null;
+          record.dateAdded = Date.now();
           store.put(record);
         }
       }
@@ -907,6 +1078,21 @@ async function getVaultFilesWithBlobsByIds(ids) {
 }
 
 /**
+ * Retrieve a single vault record by ID.
+ */
+async function getVaultRecordById(id) {
+  if (!id) return null;
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const getReq = store.get(id);
+    getReq.onsuccess = () => resolve(getReq.result || null);
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+/**
  * Get summary statistics for popup badge and UI counters.
  */
 async function getVaultStats() {
@@ -949,11 +1135,15 @@ async function getVaultStats() {
  */
 async function scanRecentDownloads() {
   let items = [];
+  // Look back up to 7 days for unprinted shipping labels
+  const pastSevenDays = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
   if (typeof chrome !== "undefined" && chrome.downloads) {
     try {
       items = await chrome.downloads.search({
         orderBy: ["-startTime"],
-        limit: 300,
+        startedAfter: pastSevenDays.toISOString(),
+        limit: 100,
       });
     } catch (err) {
       console.warn("Could not query chrome.downloads:", err);
@@ -971,6 +1161,7 @@ async function scanRecentDownloads() {
 
   const readyMap = new Map();
   const trashSet = new Set();
+  const printedSet = new Set();
   const readyRecords = [];
   const matchedVaultIds = new Set();
 
@@ -985,6 +1176,22 @@ async function scanRecentDownloads() {
       if (baseLower) trashSet.add(baseLower);
       if (downloadIdStr) trashSet.add(downloadIdStr);
       if (fingerprint) trashSet.add(fingerprint);
+    } else if (rec.status === "printed") {
+      if (nameLower) printedSet.add(nameLower);
+      if (baseLower) printedSet.add(baseLower);
+      if (downloadIdStr) printedSet.add(downloadIdStr);
+      if (fingerprint) printedSet.add(fingerprint);
+      if (rec.filename) {
+        printedSet.add(rec.filename.toLowerCase().trim());
+        printedSet.add(getBasename(rec.filename).toLowerCase().trim());
+      }
+      if (Array.isArray(rec.original_files)) {
+        for (const orig of rec.original_files) {
+          const origLower = orig.toLowerCase().trim();
+          printedSet.add(origLower);
+          printedSet.add(getBasename(origLower));
+        }
+      }
     } else if (rec.status === "ready") {
       readyRecords.push(rec);
       if (nameLower) readyMap.set(nameLower, rec);
@@ -1026,15 +1233,23 @@ async function scanRecentDownloads() {
     const fingerprint = getFileFingerprint(filename, item.fileSize || 0);
     const downloadIdStr = String(item.id);
     const nameLower = filename.toLowerCase().trim();
+    const baseLower = getBasename(nameLower);
 
-    // Check if user previously moved this to Trash
+    // Strict Blacklist Check: Exclude trashed and already PRINTED items!
     const isTrash =
       trashSet.has(fingerprint) ||
       trashSet.has(downloadIdStr) ||
-      trashSet.has(nameLower);
+      trashSet.has(nameLower) ||
+      trashSet.has(baseLower);
 
-    if (isTrash) {
-      continue; // Trashed items do not appear in active Scan Downloads
+    const isPrinted =
+      printedSet.has(fingerprint) ||
+      printedSet.has(downloadIdStr) ||
+      printedSet.has(nameLower) ||
+      printedSet.has(baseLower);
+
+    if (isTrash || isPrinted) {
+      continue; // Never re-show in active Scan Downloads!
     }
 
     // Check if ready in vault with blob or buffer
@@ -1163,6 +1378,8 @@ if (typeof self !== "undefined") {
     updateVaultSelection,
     setAllVaultSelection,
     moveVaultFilesToPrinted,
+    recordProcessedJob,
+    syncLocalHistoryItems,
     reprintVaultFiles,
     moveVaultFilesToTrash,
     restoreVaultFilesFromTrash,
@@ -1170,6 +1387,7 @@ if (typeof self !== "undefined") {
     emptyAllVaultTrash,
     getSelectedVaultFilesWithBlobs,
     getVaultFilesWithBlobsByIds,
+    getVaultRecordById,
     getVaultStats,
     classifyDownloadItem,
     scanRecentDownloads,

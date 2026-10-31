@@ -21,8 +21,11 @@ async def lifespan(app: FastAPI):
     try:
         import asyncio
         from app.services.master_sheet.service import master_sheet_service
+        from app.api.v1.endpoints.cloud_vault import cleanup_expired_cloud_files
         asyncio.create_task(master_sheet_service.heal_all_missing_waybills())
         asyncio.create_task(master_sheet_service.heal_all_wrong_order_ids())
+        # Periodic 48-hour cloud vault disk cleanup
+        cleanup_expired_cloud_files()
     except Exception as e:
         logger.warning("Could not schedule background healers: %s", str(e))
 
@@ -91,6 +94,23 @@ def create_application() -> FastAPI:
             "docs_url": "/docs",
             "health_url": f"{settings.API_V1_PREFIX}/health",
         }
+
+    @app.get("/api/logo", tags=["Brand"])
+    async def get_official_logo():
+        """Serves the official Prayxis LabelFlow brand logo directly."""
+        from pathlib import Path
+        from fastapi.responses import FileResponse
+
+        candidates = [
+            Path(__file__).resolve().parents[2] / "frontend" / "public" / "logo.png",
+            Path.cwd() / "frontend" / "public" / "logo.png",
+            Path("/home/ubuntu/labelflow/frontend/public/logo.png"),
+        ]
+        for p in candidates:
+            if p.exists():
+                return FileResponse(p, media_type="image/png")
+        from fastapi import Response
+        return Response(status_code=404)
 
     logger.info("LabelFlow API initialized successfully. Environment: %s", settings.ENVIRONMENT)
     return app

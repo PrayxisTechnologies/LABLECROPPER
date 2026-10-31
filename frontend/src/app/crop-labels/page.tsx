@@ -189,6 +189,45 @@ export default function CropLabelsPage({
       saveLocalProcessingItem(historyItem);
       setLocalHistory(getLocalProcessingHistory());
 
+      // Acknowledge printing to server cloud vault so all connected browsers update immediately!
+      try {
+        const token =
+          typeof window !== "undefined"
+            ? localStorage.getItem("labelflow_jwt_token") || localStorage.getItem("labelflow_token")
+            : null;
+        if (token) {
+          const apiBase =
+            window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+              ? "http://localhost:8000/api/v1"
+              : "/api/v1";
+          fetch(`${apiBase}/cloud-vault/mark-printed`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              filenames: rawFiles.map((f) => f.name),
+              job_id: response.job_id,
+            }),
+          }).catch(() => {});
+        }
+      } catch {}
+
+      // Broadcast live processing success & history to Chrome Extension
+      if (typeof window !== "undefined") {
+        window.postMessage(
+          {
+            source: "LABELFLOW_WEBSITE",
+            type: "LABELFLOW_PROCESSING_SUCCESS",
+            job_id: response.job_id,
+            historyItem: historyItem,
+            filenames: rawFiles.map((f) => f.name),
+          },
+          "*"
+        );
+      }
+
       if (
         response.has_ambiguity &&
         response.ambiguous_labels &&
@@ -251,6 +290,121 @@ export default function CropLabelsPage({
       );
     }
   };
+
+  /**
+   * Dedicated Chrome Extension 1-Click Vault Import Handler
+   * Replaces any existing batch with incoming files directly without duplicate name filtering,
+   * resets exclusions, and triggers immediate cropping.
+   */
+  const handleExtensionImportFiles = async (incomingFiles: File[]) => {
+    if (!incomingFiles || incomingFiles.length === 0) return;
+    setErrorMessage(null);
+    setProcessingResult(null);
+
+    const newAdditions: UploadedFileItem[] = incomingFiles.map((file) => ({
+      id: generateFileId(),
+      file,
+      name: file.name,
+      size: file.size,
+      formattedSize: formatBytes(file.size),
+      status: "ready",
+      pageCount: undefined,
+    }));
+
+    setFiles(newAdditions);
+
+    const freshConfig: ProcessingConfig = {
+      ...processingConfig,
+      excluded_main_skus: [],
+      excluded_skus: [],
+      excluded_couriers: [],
+      excluded_order_ids: [],
+    };
+    setProcessingConfig(freshConfig);
+
+    await executeProcessing(
+      newAdditions.map((u) => u.file),
+      freshConfig
+    );
+  };
+
+  // Global Window Message Listener for Chrome Extension (Auto-Cropping on Meesho/Platform Cropper)
+  useEffect(() => {
+    const handleExtensionMessage = (event: MessageEvent) => {
+      if (typeof window === "undefined") return;
+      if (event.origin !== window.location.origin) return;
+
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+
+      if (data.type === "LABELFLOW_VAULT_IMPORT") {
+        if (data._handledByCropLabelsPage) return;
+        data._handledByCropLabelsPage = true;
+
+        const incomingFiles = (data.files || []) as Array<{
+          id: string;
+          name: string;
+          size: number;
+          type: string;
+          base64?: string;
+          buffer?: ArrayBuffer;
+        }>;
+
+        if (!incomingFiles || incomingFiles.length === 0) return;
+
+        try {
+          const reconstructed: File[] = incomingFiles.map((item) => {
+            let blob: Blob;
+            if (item.base64 && typeof item.base64 === "string") {
+              const binaryString = atob(item.base64);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              blob = new Blob([bytes], { type: item.type || "application/pdf" });
+            } else if (
+              item.buffer &&
+              (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))
+            ) {
+              blob = new Blob([item.buffer], { type: item.type || "application/pdf" });
+            } else {
+              throw new Error(`File payload for "${item.name}" has no valid binary data.`);
+            }
+
+            return new File([blob], item.name, {
+              type: item.type || "application/pdf",
+              lastModified: Date.now(),
+            });
+          });
+
+          if (reconstructed.length > 0) {
+            handleExtensionImportFiles(reconstructed);
+
+            const fileIds = incomingFiles.map((i) => i.id).filter(Boolean);
+            if (fileIds.length > 0) {
+              window.postMessage(
+                {
+                  source: "LABELFLOW_WEBSITE",
+                  type: "LABELFLOW_VAULT_IMPORT_RECEIVED",
+                  fileIds: fileIds,
+                },
+                window.location.origin
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Failed to reconstruct extension files:", err);
+        }
+      }
+    };
+
+    window.addEventListener("message", handleExtensionMessage);
+    window.postMessage({ type: "LABELFLOW_PAGE_READY" }, window.location.origin);
+
+    return () => {
+      window.removeEventListener("message", handleExtensionMessage);
+    };
+  }, [processingConfig]);
 
   const handleRemoveFile = (id: string) => {
     const remaining = files.filter((item) => item.id !== id);

@@ -3,272 +3,193 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LabelFlow PDF Vault</title>
+  <title>LabelFlow — Shipping Labels</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="popup-container">
-    <!-- Header -->
-    <header class="popup-header">
-      <div class="brand">
-        <div class="brand-logo">⚡</div>
-        <div class="brand-text">
+    <!-- Clean Minimal Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+        </div>
+        <div class="brand-titles">
           <h1>LabelFlow</h1>
-          <p>Shipping Label PDF Vault</p>
+          <span class="brand-sub">Shipping Labels</span>
         </div>
       </div>
-      <div class="header-actions">
-        <button type="button" class="header-btn scan-btn" id="headerScanBtn" title="Scan recent browser downloads for shipping labels">
-          <span class="btn-spin-icon">🔍</span> Scan
+
+      <div class="header-right">
+        <button type="button" class="btn-upload-header" id="headerUploadBtn" title="Upload shipping label PDFs to crop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <span>+ Upload PDFs</span>
         </button>
-        <button type="button" class="header-btn primary" id="headerAddBtn" title="Import PDF files directly into Vault">
-          <span>➕</span> Add PDF
-        </button>
-        <button type="button" class="icon-btn" id="refreshBtn" title="Refresh Vault list">
-          <span class="refresh-icon">🔄</span>
-        </button>
-        <div class="status-indicator" id="statusPill">
-          <span class="status-dot"></span>
-          <span id="statusText">Active</span>
+
+        <div class="auth-pill" id="authPill" title="Account Status">
+          <span class="auth-dot" id="authDot"></span>
+          <span id="authStatusText">Signed In</span>
         </div>
       </div>
     </header>
-
-    <!-- Auth Status / Gatekeeper Bar -->
-    <div class="auth-bar logged-out" id="authBar">
-      <div class="auth-info" id="authInfo">
-        <span class="auth-icon" id="authIcon">🔒</span>
-        <span class="auth-text" id="authText">Login Required to Crop & Upload (100% Free)</span>
-      </div>
-      <button type="button" class="auth-btn" id="authActionBtn">Log In (Free)</button>
-    </div>
 
     <!-- Hidden Native File Inputs -->
     <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" multiple style="display: none;" />
     <input type="file" id="singleFileInput" accept="application/pdf,.pdf" style="display: none;" />
 
-    <!-- Navigation Tabs: Scan Downloads vs Printed vs Trash -->
-    <nav class="vault-tabs">
-      <button type="button" class="tab-btn active" id="tabScanBtn">
-        <span>📥 Scan Downloads</span>
-        <span class="tab-count scan-count" id="scanTabCount">0</span>
+    <!-- Clean Navigation Tabs (2 Primary Tabs) -->
+    <nav class="nav-tabs">
+      <button type="button" class="tab-item active" id="tabPendingBtn">
+        <span>Pending Labels</span>
+        <span class="tab-badge alert" id="pendingTabCount">0</span>
       </button>
-      <button type="button" class="tab-btn" id="tabPrintedBtn">
-        <span>🖨️ Printed</span>
-        <span class="tab-count" id="printedTabCount">0</span>
-      </button>
-      <button type="button" class="tab-btn" id="tabTrashBtn">
-        <span>🗑️ Trash</span>
-        <span class="tab-count" id="trashTabCount">0</span>
+      <button type="button" class="tab-item" id="tabHistoryBtn">
+        <span>Printed History</span>
+        <span class="tab-badge" id="historyTabCount">0</span>
       </button>
     </nav>
 
-    <!-- Error / Info Toast Banner -->
-    <div class="vault-banner" id="vaultBanner" style="display: none;">
-      <span class="banner-icon" id="bannerIcon">ℹ️</span>
-      <span class="banner-text" id="bannerText">Notification message</span>
+    <!-- Global Toast / Alert Banner -->
+    <div class="app-banner" id="vaultBanner" style="display: none;">
+      <span class="banner-text" id="bannerText"></span>
       <button type="button" class="banner-close" id="bannerCloseBtn">✕</button>
     </div>
 
-    <!-- TAB 1: Scan Downloads View -->
-    <section class="tab-content" id="scanView">
-      <div class="scan-scroll-wrapper">
-        <!-- Today's Download Summary Dashboard -->
-        <div class="summary-dashboard-card">
-          <div class="dashboard-header">
-            <div class="dashboard-title-group">
-              <span class="dash-icon">📊</span>
-              <h2>Today's Label Downloads — <span id="summaryTodayDate" class="highlight-date">--</span></h2>
-            </div>
-            <button type="button" class="mini-rescan-btn" id="dashboardRescanBtn" title="Scan downloads again">
-              <span>🔄</span> Refresh Scan
-            </button>
-          </div>
-
-          <!-- Platform Counts Grid -->
-          <div class="platforms-grid">
-            <div class="platform-stat meesho" data-platform="Meesho">
-              <span class="p-icon">🛍️</span>
-              <div class="p-info">
-                <span class="p-name">Meesho</span>
-                <span class="p-count" id="countMeesho">0</span>
-              </div>
-            </div>
-            <div class="platform-stat flipkart" data-platform="Flipkart">
-              <span class="p-icon">🛒</span>
-              <div class="p-info">
-                <span class="p-name">Flipkart</span>
-                <span class="p-count" id="countFlipkart">0</span>
-              </div>
-            </div>
-            <div class="platform-stat snapdeal" data-platform="Snapdeal">
-              <span class="p-icon">🏷️</span>
-              <div class="p-info">
-                <span class="p-name">Snapdeal</span>
-                <span class="p-count" id="countSnapdeal">0</span>
-              </div>
-            </div>
-            <div class="platform-stat amazon" data-platform="Amazon">
-              <span class="p-icon">📦</span>
-              <div class="p-info">
-                <span class="p-name">Amazon</span>
-                <span class="p-count" id="countAmazon">0</span>
-              </div>
-            </div>
-            <div class="platform-stat myntra" data-platform="Myntra">
-              <span class="p-icon">👗</span>
-              <div class="p-info">
-                <span class="p-name">Myntra</span>
-                <span class="p-count" id="countMyntra">0</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Total Eligible Highlight Banner -->
-          <div class="total-eligible-banner">
-            <span class="banner-sparkle">⚡</span>
-            <span class="total-label">Total eligible label PDFs:</span>
-            <span class="total-number" id="countTotalEligible">0</span>
-          </div>
-
-          <!-- Scan Metadata Row -->
-          <div class="dashboard-meta-row">
-            <div class="meta-item" title="Local computer time when scan occurred">
-              <span class="meta-label">Last scan:</span>
-              <span class="meta-val" id="metaLastScan">--</span>
-            </div>
-            <div class="meta-item" title="Total PDF files downloaded today">
-              <span class="meta-label">PDFs today:</span>
-              <span class="meta-val" id="metaTotalPdfs">0</span>
-            </div>
-            <div class="meta-item" title="Eligible PDFs ready in Vault">
-              <span class="meta-label">Ready:</span>
-              <span class="meta-val success" id="metaStored">0</span>
-            </div>
-            <div class="meta-item" title="Eligible PDFs detected but need import">
-              <span class="meta-label">New:</span>
-              <span class="meta-val warning" id="metaNewEligible">0</span>
-            </div>
-            <div class="meta-item" title="Non-label PDFs ignored">
-              <span class="meta-label">Ignored:</span>
-              <span class="meta-val muted" id="metaIgnored">0</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Filter Pills Bar -->
-        <div class="filter-pills-bar">
-          <div class="pills-scroll">
-            <button type="button" class="filter-pill active" data-filter="ALL">All Platforms</button>
-            <button type="button" class="filter-pill" data-filter="Meesho">Meesho</button>
-            <button type="button" class="filter-pill" data-filter="Flipkart">Flipkart</button>
-            <button type="button" class="filter-pill" data-filter="Snapdeal">Snapdeal</button>
-            <button type="button" class="filter-pill" data-filter="Amazon">Amazon</button>
-            <button type="button" class="filter-pill" data-filter="Myntra">Myntra</button>
-          </div>
-          <div class="date-toggle">
-            <button type="button" class="date-pill active" id="filterTodayBtn">Today</button>
-            <button type="button" class="date-pill" id="filterAllRecentBtn">All Recent</button>
-          </div>
-        </div>
-
-        <!-- Bulk Selection Toolbar for Scan Downloads -->
-        <div class="toolbar">
-          <div class="toolbar-left">
-            <button type="button" class="tool-btn" id="selectAllBtn">Select All</button>
-            <span class="divider">|</span>
-            <button type="button" class="tool-btn" id="deselectAllBtn">Deselect</button>
-          </div>
-          <div class="toolbar-right">
-            <span class="count-badge" id="selectedCountBadge">0 / 0 Ready</span>
-          </div>
-        </div>
-
-        <!-- Scanned PDF List Container -->
-        <main class="list-container scan-list-container" id="scanListContainer">
-          <!-- Loading State -->
-          <div class="loading-state" id="scanLoadingState" style="display: none;">
-            <div class="spinner"></div>
-            <p>Scanning recent downloads for marketplace labels...</p>
-          </div>
-
-          <!-- Empty State -->
-          <div class="empty-state" id="scanEmptyState" style="display: none;">
-            <div class="empty-icon">🔍</div>
-            <h3>No Label Downloads Found</h3>
-            <p>Download shipping labels from Meesho, Flipkart, Snapdeal, Amazon, or Myntra, then click "Scan Downloads".</p>
-            <button type="button" class="action-btn-primary" id="scanEmptyActionBtn">
-              <span>🔄</span> Scan Downloads Now
-            </button>
-          </div>
-
-          <!-- Scanned Items Dynamic Container -->
-          <div class="items-list" id="scannedItemsList"></div>
-        </main>
-      </div>
-    </section>
-
-    <!-- TAB 2: Printed View -->
-    <section class="tab-content" id="printedView" style="display: none;">
-      <div class="toolbar">
+    <!-- VIEW 1: Pending Unprinted Labels Queue -->
+    <section class="tab-view active" id="pendingView">
+      <div class="view-toolbar">
         <div class="toolbar-left">
-          <span class="trash-hint">🖨️ Labels cropped and printed on LabelFlow</span>
+          <button type="button" class="link-btn primary" id="addMoreBtn">+ Add PDF</button>
+          <span class="sep">·</span>
+          <button type="button" class="link-btn" id="selectAllBtn">Select All</button>
+          <span class="sep">·</span>
+          <button type="button" class="link-btn" id="deselectAllBtn">Deselect</button>
         </div>
         <div class="toolbar-right">
-          <button type="button" class="tool-btn danger" id="trashAllPrintedBtn" title="Move all printed labels to Trash">
-            Move to Trash
+          <span class="selection-indicator" id="selectedCountBadge">0 Selected</span>
+          <span class="sep">·</span>
+          <button type="button" class="link-btn danger" id="trashSelectedBtn" title="Remove selected from list">
+            Delete Selected
           </button>
         </div>
       </div>
 
-      <main class="list-container" id="printedListContainer">
+      <main class="list-container" id="pendingListContainer">
+        <!-- Loading Spinner -->
+        <div class="state-box" id="pendingLoadingState" style="display: none;">
+          <div class="clean-spinner"></div>
+          <p>Loading pending labels...</p>
+        </div>
+
         <!-- Empty State -->
-        <div class="empty-state" id="printedEmptyState" style="display: none;">
-          <div class="empty-icon">🖨️</div>
-          <h3>No Printed Labels Yet</h3>
-          <p>Labels cropped and processed on LabelFlow website will be archived here for easy re-printing.</p>
+        <div class="state-box" id="pendingEmptyState" style="display: none;">
+          <div class="state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="12" y1="18" x2="12" y2="12"></line>
+              <line x1="9" y1="15" x2="15" y2="15"></line>
+            </svg>
+          </div>
+          <h3>No Pending Labels</h3>
+          <p>Upload Meesho, Flipkart, Amazon, or Snapdeal shipping label PDFs to crop.</p>
+          <button type="button" class="btn-primary-upload" id="emptyUploadBtn">
+            📁 Upload Label PDFs
+          </button>
         </div>
 
-        <!-- Printed Items Dynamic Container -->
-        <div class="items-list" id="printedItemsList"></div>
+        <!-- Dynamic List of Pending Labels -->
+        <div class="items-list" id="pendingItemsList"></div>
       </main>
+
+      <!-- Sticky Bottom Action Footer -->
+      <footer class="app-footer">
+        <button type="button" class="btn-cta-print" id="cropSelectedBtn" disabled>
+          <span id="cropBtnText">Print Selected (0)</span>
+        </button>
+      </footer>
     </section>
 
-    <!-- TAB 3: Trash View -->
-    <section class="tab-content" id="trashView" style="display: none;">
-      <div class="toolbar trash-toolbar">
+    <!-- VIEW 2: Printed History (1:1 with Website Label Processing History) -->
+    <section class="tab-view" id="historyView" style="display: none;">
+      <div class="view-toolbar">
         <div class="toolbar-left">
-          <span class="trash-hint">🗑️ Deleted labels are saved here</span>
+          <button type="button" class="link-btn" id="selectAllHistoryBtn">Select All</button>
+          <span class="sep">·</span>
+          <button type="button" class="link-btn" id="deselectAllHistoryBtn">Deselect</button>
         </div>
         <div class="toolbar-right">
-          <button type="button" class="tool-btn danger" id="emptyTrashBtn" title="Permanently delete all files in Trash">
-            Empty Trash
+          <button type="button" class="link-btn primary" id="reprintSelectedBtn" title="Queue selected back to Pending Labels">
+            Reprint Selected
+          </button>
+          <span class="sep">·</span>
+          <button type="button" class="link-btn danger" id="clearHistoryBtn" title="Clear processed history">
+            Clear History
           </button>
         </div>
       </div>
 
-      <main class="list-container" id="trashListContainer">
-        <div class="empty-state" id="trashEmptyState" style="display: none;">
-          <div class="empty-icon">🗑️</div>
-          <h3>Trash is Empty</h3>
-          <p>Deleted labels will appear here. You can restore them anytime back to Scan Downloads.</p>
+      <main class="list-container" id="historyListContainer">
+        <!-- Empty State -->
+        <div class="state-box" id="historyEmptyState" style="display: none;">
+          <div class="state-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <h3>No Processing History Yet</h3>
+          <p>Cropped 4×6 labels from LabelFlow will appear here for 1-click viewing, downloading, and re-printing.</p>
         </div>
 
-        <!-- Trash Items Dynamic Container -->
-        <div class="items-list" id="trashItemsList"></div>
+        <!-- Dynamic List of Processed Batches (Identical to Website) -->
+        <div class="items-list" id="historyItemsList"></div>
       </main>
     </section>
 
-    <!-- Footer Action -->
-    <footer class="popup-footer">
-      <button type="button" class="crop-btn" id="cropSelectedBtn">
-        <span class="btn-icon">⚡</span>
-        <span class="btn-text" id="cropBtnText">PRINT / CROP SELECTED (0)</span>
-      </button>
-      <div class="footer-note">
-        <span>Files transfer directly into LabelFlow website on <a href="https://labelcropper.prayxis.in/#generator" target="_blank" id="homeLink">labelcropper.prayxis.in</a></span>
+    <!-- Already Printed Confirmation Modal Popup -->
+    <div class="modal-overlay" id="duplicateModal" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-warning-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </div>
+          <div class="modal-header-text">
+            <h3 class="modal-title">Already Printed Label</h3>
+            <span class="modal-subtitle">Duplicate label detected</span>
+          </div>
+        </div>
+
+        <div class="modal-body">
+          <p class="modal-message" id="duplicateModalMessage">
+            Ye file already print ho chuki hai. Kya aap isko Pending Labels me add karke re-print karna chahte hain?
+          </p>
+          <div class="modal-files-list" id="duplicateModalFilesList" style="display: none;"></div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-modal-cancel" id="duplicateModalNoBtn">
+            ✕ No, Don't Upload
+          </button>
+          <button type="button" class="btn-modal-confirm" id="duplicateModalYesBtn">
+            ✓ Yes, Add to Pending
+          </button>
+        </div>
       </div>
-    </footer>
+    </div>
   </div>
 
   <script src="vault-storage.js"></script>

@@ -1,24 +1,38 @@
 /**
- * LabelFlow Chrome Extension — Vault, Scanner & Printed Labels Controller
+ * LabelFlow Chrome Extension — Minimal & Professional Popup Controller
+ * Version: 2.5.0 — Multi-Device Cloud Sync & Centralized Thermal Printing
  */
 
+// Helper: Format byte sizes cleanly
 function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return "0 B";
+  if (!bytes || bytes <= 0) return "0 B";
   const k = 1024;
   const sizes = ["B", "KB", "MB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i] || "MB"}`;
 }
 
-function formatTimeAgo(timestamp) {
+// Helper: Format timestamps cleanly
+function formatRelativeOrDate(timestamp) {
   if (!timestamp) return "";
-  const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-  if (diffSec < 60) return "Just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return "";
+
+  const now = new Date();
+  const isToday =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+
+  const timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (isToday) {
+    return `Today, ${timeStr}`;
+  }
+  const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${dateStr}, ${timeStr}`;
 }
 
+// Helper: Convert ArrayBuffer to Base64
 function bufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -32,1008 +46,1315 @@ function bufferToBase64(buffer) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  // DOM Elements: Header & Navigation
-  const headerScanBtn = document.getElementById("headerScanBtn");
-  const headerAddBtn = document.getElementById("headerAddBtn");
-  const refreshBtn = document.getElementById("refreshBtn");
-  const pdfFileInput = document.getElementById("pdfFileInput");
-  const singleFileInput = document.getElementById("singleFileInput");
+  // --- DOM Elements: Header & Navigation ---
+  const headerUploadBtn = document.getElementById("headerUploadBtn");
+  const authPill = document.getElementById("authPill");
+  const authDot = document.getElementById("authDot");
+  const authStatusText = document.getElementById("authStatusText");
 
-  const tabScanBtn = document.getElementById("tabScanBtn");
-  const tabPrintedBtn = document.getElementById("tabPrintedBtn");
-  const tabTrashBtn = document.getElementById("tabTrashBtn");
-  const scanTabCount = document.getElementById("scanTabCount");
-  const printedTabCount = document.getElementById("printedTabCount");
-  const trashTabCount = document.getElementById("trashTabCount");
+  const tabPendingBtn = document.getElementById("tabPendingBtn");
+  const tabHistoryBtn = document.getElementById("tabHistoryBtn");
+  const pendingTabCount = document.getElementById("pendingTabCount");
+  const historyTabCount = document.getElementById("historyTabCount");
 
-  // Tab Views
-  const scanView = document.getElementById("scanView");
-  const printedView = document.getElementById("printedView");
-  const trashView = document.getElementById("trashView");
+  const pendingView = document.getElementById("pendingView");
+  const historyView = document.getElementById("historyView");
 
-  // Dashboard Elements
-  const summaryTodayDate = document.getElementById("summaryTodayDate");
-  const dashboardRescanBtn = document.getElementById("dashboardRescanBtn");
-  const countMeesho = document.getElementById("countMeesho");
-  const countFlipkart = document.getElementById("countFlipkart");
-  const countSnapdeal = document.getElementById("countSnapdeal");
-  const countAmazon = document.getElementById("countAmazon");
-  const countMyntra = document.getElementById("countMyntra");
-  const countTotalEligible = document.getElementById("countTotalEligible");
-
-  const metaLastScan = document.getElementById("metaLastScan");
-  const metaTotalPdfs = document.getElementById("metaTotalPdfs");
-  const metaStored = document.getElementById("metaStored");
-  const metaNewEligible = document.getElementById("metaNewEligible");
-  const metaIgnored = document.getElementById("metaIgnored");
-
-  // Filter Elements
-  const filterPills = document.querySelectorAll(".filter-pill");
-  const filterTodayBtn = document.getElementById("filterTodayBtn");
-  const filterAllRecentBtn = document.getElementById("filterAllRecentBtn");
-  const platformStatCards = document.querySelectorAll(".platform-stat");
-
-  // Scanned List Elements
-  const scanLoadingState = document.getElementById("scanLoadingState");
-  const scanEmptyState = document.getElementById("scanEmptyState");
-  const scanEmptyActionBtn = document.getElementById("scanEmptyActionBtn");
-  const scannedItemsList = document.getElementById("scannedItemsList");
-
-  // Printed & Trash List Elements
-  const printedListContainer = document.getElementById("printedListContainer");
-  const printedItemsList = document.getElementById("printedItemsList");
-  const printedEmptyState = document.getElementById("printedEmptyState");
-  const trashItemsList = document.getElementById("trashItemsList");
-  const trashEmptyState = document.getElementById("trashEmptyState");
-
-  // Toolbars & Action Buttons
-  const selectAllBtn = document.getElementById("selectAllBtn");
-  const deselectAllBtn = document.getElementById("deselectAllBtn");
-  const trashAllPrintedBtn = document.getElementById("trashAllPrintedBtn");
-  const emptyTrashBtn = document.getElementById("emptyTrashBtn");
-  const selectedCountBadge = document.getElementById("selectedCountBadge");
-
-  // Footer Elements
-  const cropSelectedBtn = document.getElementById("cropSelectedBtn");
-  const cropBtnText = document.getElementById("cropBtnText");
-  const homeLink = document.getElementById("homeLink");
-
-  // Toast Banner
+  // --- DOM Elements: Banner ---
   const vaultBanner = document.getElementById("vaultBanner");
   const bannerText = document.getElementById("bannerText");
-  const bannerIcon = document.getElementById("bannerIcon");
   const bannerCloseBtn = document.getElementById("bannerCloseBtn");
 
-  // Auth Gatekeeper Elements
-  const authBar = document.getElementById("authBar");
-  const authIcon = document.getElementById("authIcon");
-  const authText = document.getElementById("authText");
-  const authActionBtn = document.getElementById("authActionBtn");
+  // --- DOM Elements: Pending Queue ---
+  const addMoreBtn = document.getElementById("addMoreBtn");
+  const selectAllBtn = document.getElementById("selectAllBtn");
+  const deselectAllBtn = document.getElementById("deselectAllBtn");
+  const selectedCountBadge = document.getElementById("selectedCountBadge");
+  const trashSelectedBtn = document.getElementById("trashSelectedBtn");
 
-  let currentAuthState = { isLoggedIn: false, user: null };
+  const pendingLoadingState = document.getElementById("pendingLoadingState");
+  const pendingEmptyState = document.getElementById("pendingEmptyState");
+  const emptyUploadBtn = document.getElementById("emptyUploadBtn");
+  const pendingItemsList = document.getElementById("pendingItemsList");
 
-  const updateAuthUI = (auth) => {
-    if (auth && auth.isLoggedIn) {
-      currentAuthState = auth;
-      if (authBar) authBar.className = "auth-bar logged-in";
-      if (authIcon) authIcon.textContent = "✓";
-      const uName = auth.user?.name || auth.user?.email || "Seller Account";
-      if (authText) authText.textContent = `Connected: ${uName}`;
-      if (authActionBtn) {
-        authActionBtn.textContent = "Dashboard";
-        authActionBtn.onclick = () => {
-          chrome.tabs.create({ url: "https://labelcropper.prayxis.in/dashboard" });
-        };
-      }
-    } else {
-      currentAuthState = { isLoggedIn: false, user: null };
-      if (authBar) authBar.className = "auth-bar logged-out";
-      if (authIcon) authIcon.textContent = "🔒";
-      if (authText) authText.textContent = "Login Required to Upload (Free)";
-      if (authActionBtn) {
-        authActionBtn.textContent = "Log In (Free)";
-        authActionBtn.onclick = () => {
-          chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
-        };
-      }
-    }
-  };
+  const cropSelectedBtn = document.getElementById("cropSelectedBtn");
+  const cropBtnText = document.getElementById("cropBtnText");
 
-  const checkAuthStatus = async () => {
+  // --- DOM Elements: Printed History ---
+  const selectAllHistoryBtn = document.getElementById("selectAllHistoryBtn");
+  const deselectAllHistoryBtn = document.getElementById("deselectAllHistoryBtn");
+  const reprintSelectedBtn = document.getElementById("reprintSelectedBtn");
+  const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+
+  const historyEmptyState = document.getElementById("historyEmptyState");
+  const historyItemsList = document.getElementById("historyItemsList");
+
+  // --- Hidden File Inputs ---
+  const pdfFileInput = document.getElementById("pdfFileInput");
+
+  // --- DOM Elements: Already Printed Confirmation Modal ---
+  const duplicateModal = document.getElementById("duplicateModal");
+  const duplicateModalMessage = document.getElementById("duplicateModalMessage");
+  const duplicateModalFilesList = document.getElementById("duplicateModalFilesList");
+  const duplicateModalYesBtn = document.getElementById("duplicateModalYesBtn");
+  const duplicateModalNoBtn = document.getElementById("duplicateModalNoBtn");
+
+  // --- State Variables ---
+  let currentTab = "pending"; // "pending" | "history"
+  let pendingItems = [];
+  let historyItems = [];
+  let currentAuthState = { isLoggedIn: false, user: null, token: null };
+  let activeApiBase = "https://labelcropper.prayxis.in/api/v1";
+
+  // Dynamic API Base URL resolution: matches localhost vs production
+  async function resolveApiBase() {
     try {
-      // 1. Direct Chrome Cookie Check (ALWAYS WORKS!)
-      try {
-        const cookies = await chrome.cookies.getAll({ name: "labelflow_token" });
-        if (cookies && cookies.length > 0 && cookies[0].value) {
-          updateAuthUI({
-            isLoggedIn: true,
-            user: { name: "Seller Account", email: "Active Seller" },
-            token: cookies[0].value,
-          });
-          return;
-        }
-      } catch (cErr) {
-        console.debug("Popup cookie query error:", cErr);
+      const tabs = await chrome.tabs.query({});
+      const localTab = tabs.find((t) => t.url && t.url.includes("localhost:3000"));
+      if (localTab) {
+        activeApiBase = "http://localhost:8000/api/v1";
+      } else {
+        activeApiBase = "https://labelcropper.prayxis.in/api/v1";
       }
+    } catch {}
+    return activeApiBase;
+  }
 
-      chrome.runtime.sendMessage({ action: "CHECK_AUTH_STATUS" }, (res) => {
-        if (res && res.auth && res.auth.isLoggedIn) {
-          updateAuthUI(res.auth);
-        } else {
-          updateAuthUI({ isLoggedIn: false, user: null });
-        }
-      });
-    } catch (e) {
-      console.debug("Auth check failed:", e);
-    }
-  };
-
-  // App State
-  let currentTab = "scan"; // "scan" | "printed" | "trash"
-  let readyVaultItems = [];
-  let printedVaultItems = [];
-  let trashVaultItems = [];
-  let scannedDownloads = [];
-  let currentFilter = "ALL";
-  let currentDateScope = "TODAY";
-  let pendingImportDownload = null;
-
+  // --- Banner Notification ---
   function showBanner(msg, type = "info") {
-    if (!vaultBanner) return;
+    if (!vaultBanner || !bannerText) return;
     bannerText.textContent = msg;
-    bannerIcon.textContent = type === "error" ? "⚠️" : type === "success" ? "✓" : "ℹ️";
-    vaultBanner.className = `vault-banner ${type}`;
+    vaultBanner.className = `app-banner ${type}`;
     vaultBanner.style.display = "flex";
   }
 
   function hideBanner() {
-    if (!vaultBanner) return;
-    vaultBanner.style.display = "none";
+    if (vaultBanner) vaultBanner.style.display = "none";
   }
 
   if (bannerCloseBtn) {
     bannerCloseBtn.addEventListener("click", hideBanner);
   }
 
-  // Switch between Tabs
+  // --- Tab Switching ---
   function switchTab(tab) {
     currentTab = tab;
     hideBanner();
 
-    tabScanBtn.classList.toggle("active", tab === "scan");
-    tabPrintedBtn.classList.toggle("active", tab === "printed");
-    tabTrashBtn.classList.toggle("active", tab === "trash");
+    if (tabPendingBtn) tabPendingBtn.classList.toggle("active", tab === "pending");
+    if (tabHistoryBtn) tabHistoryBtn.classList.toggle("active", tab === "history");
 
-    scanView.style.display = tab === "scan" ? "flex" : "none";
-    printedView.style.display = tab === "printed" ? "flex" : "none";
-    trashView.style.display = tab === "trash" ? "flex" : "none";
+    if (pendingView) pendingView.style.display = tab === "pending" ? "flex" : "none";
+    if (historyView) historyView.style.display = tab === "history" ? "flex" : "none";
 
-    if (tab === "scan") {
-      renderScannedList();
-    } else if (tab === "printed") {
-      renderPrintedList(printedVaultItems);
+    if (tab === "pending") {
+      renderPendingList();
     } else {
-      renderTrashList(trashVaultItems);
+      renderHistoryList();
+      syncCloudVaultState();
     }
     updateCtaButton();
   }
 
-  tabScanBtn.addEventListener("click", () => switchTab("scan"));
-  tabPrintedBtn.addEventListener("click", () => switchTab("printed"));
-  tabTrashBtn.addEventListener("click", () => switchTab("trash"));
+  if (tabPendingBtn) tabPendingBtn.addEventListener("click", () => switchTab("pending"));
+  if (tabHistoryBtn) tabHistoryBtn.addEventListener("click", () => switchTab("history"));
 
-  // Update Footer CTA Button & Counters
-  function updateCtaButton() {
-    const selectedReadyCount = readyVaultItems.filter((i) => i.selected).length;
-    cropBtnText.textContent = `PRINT / CROP SELECTED (${selectedReadyCount})`;
-    cropSelectedBtn.disabled = selectedReadyCount === 0;
-    if (selectedReadyCount > 0) {
-      cropSelectedBtn.classList.remove("disabled-btn");
+  // --- Auth & Connect UI Management ---
+  function updateAuthUI(auth) {
+    if (auth && auth.isLoggedIn) {
+      currentAuthState = auth;
+      const uName = auth.user?.name || "Connected";
+      const shortName = uName.length > 11 ? uName.slice(0, 9) + "…" : uName;
+
+      if (authPill) {
+        authPill.className = "auth-pill connected";
+        authPill.title = `☁️ Connected as ${uName}. Multi-device cloud sync active. Click to open Dashboard.`;
+        authPill.onclick = () => {
+          const dashUrl = activeApiBase.includes("localhost")
+            ? "http://localhost:3000/dashboard"
+            : "https://labelcropper.prayxis.in/dashboard";
+          chrome.tabs.create({ url: dashUrl });
+        };
+      }
+      if (authDot) authDot.style.background = "#10B981";
+      if (authStatusText) authStatusText.textContent = `☁️ ${shortName}`;
     } else {
-      cropSelectedBtn.classList.add("disabled-btn");
-    }
-
-    if (selectedCountBadge) {
-      selectedCountBadge.textContent = `${selectedReadyCount} / ${readyVaultItems.length} Ready`;
+      currentAuthState = { isLoggedIn: false, user: null, token: null };
+      if (authPill) {
+        authPill.className = "auth-pill disconnected";
+        authPill.title = "Click to Connect your LabelFlow account to access PDFs from any device/browser.";
+        authPill.onclick = async () => {
+          showBanner("Connecting to LabelFlow account...", "info");
+          await syncFromOpenTabs();
+          if (currentAuthState && currentAuthState.isLoggedIn) {
+            showBanner(`✓ Connected as ${currentAuthState.user?.name || "Seller"}!`, "success");
+            await loadExtensionData(false);
+          } else {
+            const loginUrl = activeApiBase.includes("localhost")
+              ? "http://localhost:3000/login"
+              : "https://labelcropper.prayxis.in/login";
+            chrome.tabs.create({ url: loginUrl });
+          }
+        };
+      }
+      if (authDot) authDot.style.background = "#F59E0B";
+      if (authStatusText) authStatusText.textContent = "⚡ Connect";
     }
   }
 
-  // Fetch Vault Data (Ready, Printed, Trash)
-  function fetchVaultData(showLoading = false) {
-    chrome.runtime.sendMessage({ action: "VAULT_GET_DATA" }, (response) => {
-      if (chrome.runtime.lastError) {
-        showBanner(chrome.runtime.lastError.message, "error");
-        return;
-      }
+  // Live Auth & History Extraction using chrome.scripting across open tabs
+  async function syncFromOpenTabs() {
+    try {
+      const tabs = await chrome.tabs.query({});
+      for (const t of tabs) {
+        if (!t.id || !t.url) continue;
+        const isTarget =
+          t.url.includes("localhost:3000") ||
+          t.url.includes("labelcropper.prayxis.in") ||
+          t.url.includes("prayxis.in");
 
-      if (response && response.success) {
-        readyVaultItems = response.stored || [];
-        printedVaultItems = response.printed || [];
-        trashVaultItems = response.trash || [];
-
-        if (printedTabCount) printedTabCount.textContent = String(printedVaultItems.length);
-        if (trashTabCount) trashTabCount.textContent = String(trashVaultItems.length);
-
-        updateCtaButton();
-
-        if (currentTab === "printed") {
-          renderPrintedList(printedVaultItems);
-        } else if (currentTab === "trash") {
-          renderTrashList(trashVaultItems);
-        }
-      }
-    });
-  }
-
-  // Trigger Download Scanner
-  function triggerScan(showLoading = true) {
-    if (showLoading) {
-      if (scanLoadingState) scanLoadingState.style.display = "flex";
-      if (scanEmptyState) scanEmptyState.style.display = "none";
-      if (headerScanBtn) headerScanBtn.classList.add("spinning");
-      if (dashboardRescanBtn) dashboardRescanBtn.classList.add("spinning");
-    }
-
-    chrome.runtime.sendMessage({ action: "SCAN_DOWNLOADS" }, (response) => {
-      if (scanLoadingState) scanLoadingState.style.display = "none";
-      if (headerScanBtn) headerScanBtn.classList.remove("spinning");
-      if (dashboardRescanBtn) dashboardRescanBtn.classList.remove("spinning");
-
-      if (chrome.runtime.lastError) {
-        showBanner("Scan error: " + chrome.runtime.lastError.message, "error");
-        return;
-      }
-
-      if (response && response.success) {
-        const sum = response.summary || {};
-        scannedDownloads = response.downloads || [];
-
-        // Update Today's Summary Dashboard
-        if (summaryTodayDate) summaryTodayDate.textContent = sum.todayDate || "--";
-        if (countMeesho) countMeesho.textContent = String(sum.meeshoCount || 0);
-        if (countFlipkart) countFlipkart.textContent = String(sum.flipkartCount || 0);
-        if (countSnapdeal) countSnapdeal.textContent = String(sum.snapdealCount || 0);
-        if (countAmazon) countAmazon.textContent = String(sum.amazonCount || 0);
-        if (countMyntra) countMyntra.textContent = String(sum.myntraCount || 0);
-        if (countTotalEligible) countTotalEligible.textContent = String(sum.totalEligibleToday || 0);
-
-        if (metaLastScan) metaLastScan.textContent = sum.lastScanTime || "--";
-        if (metaTotalPdfs) metaTotalPdfs.textContent = String(sum.totalPdfsFoundToday || 0);
-        if (metaStored) metaStored.textContent = String(sum.alreadyStoredCount || 0);
-        if (metaNewEligible) metaNewEligible.textContent = String(sum.newEligibleCount || 0);
-        if (metaIgnored) metaIgnored.textContent = String(sum.ignoredFilesCount || 0);
-
-        if (scanTabCount) scanTabCount.textContent = String(scannedDownloads.length || sum.totalEligibleToday || 0);
-
-        renderScannedList();
-        fetchVaultData(false);
-      }
-    });
-  }
-
-  // Filter Pill Listeners
-  filterPills.forEach((pill) => {
-    pill.addEventListener("click", () => {
-      filterPills.forEach((p) => p.classList.remove("active"));
-      pill.classList.add("active");
-      currentFilter = pill.getAttribute("data-filter") || "ALL";
-      renderScannedList();
-    });
-  });
-
-  // Clicking Platform cards sets that filter directly
-  platformStatCards.forEach((card) => {
-    card.addEventListener("click", () => {
-      const platform = card.getAttribute("data-platform");
-      if (!platform) return;
-      currentFilter = platform;
-      filterPills.forEach((p) => {
-        p.classList.toggle("active", p.getAttribute("data-filter") === platform);
-      });
-      renderScannedList();
-    });
-  });
-
-  // Date Scope Toggles
-  if (filterTodayBtn && filterAllRecentBtn) {
-    filterTodayBtn.addEventListener("click", () => {
-      filterTodayBtn.classList.add("active");
-      filterAllRecentBtn.classList.remove("active");
-      currentDateScope = "TODAY";
-      renderScannedList();
-    });
-
-    filterAllRecentBtn.addEventListener("click", () => {
-      filterAllRecentBtn.classList.add("active");
-      filterTodayBtn.classList.remove("active");
-      currentDateScope = "ALL";
-      renderScannedList();
-    });
-  }
-
-  // Render Scanned Downloads List (TAB 1)
-  function renderScannedList() {
-    if (!scannedItemsList) return;
-    scannedItemsList.innerHTML = "";
-
-    // Apply Filter & Date Scope
-    const filtered = scannedDownloads.filter((item) => {
-      if (currentDateScope === "TODAY" && !item.isToday) {
-        return false;
-      }
-      if (currentFilter !== "ALL" && item.platform !== currentFilter) {
-        return false;
-      }
-      if (currentFilter === "ALL" && !item.isEligible && !item.isReviewNeeded) {
-        return false;
-      }
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      if (scanEmptyState) scanEmptyState.style.display = "flex";
-      return;
-    }
-
-    if (scanEmptyState) scanEmptyState.style.display = "none";
-
-    filtered.forEach((item) => {
-      const card = document.createElement("div");
-      card.className = `item-card ${item.selected ? "selected" : ""}`;
-
-      const left = document.createElement("div");
-      left.className = "item-left";
-
-      // If item is ready in vault, show selection Checkbox
-      if (item.isReady && item.vaultId) {
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.className = "item-checkbox";
-        checkbox.checked = Boolean(item.selected);
-        checkbox.addEventListener("change", async (e) => {
-          e.stopPropagation();
-          item.selected = checkbox.checked;
-          card.classList.toggle("selected", item.selected);
-          await VaultStorage.updateVaultSelection(item.vaultId, checkbox.checked);
-          chrome.runtime.sendMessage({ action: "UPDATE_VAULT_BADGE" });
-          fetchVaultData(false);
-        });
-        left.appendChild(checkbox);
-      }
-
-      const details = document.createElement("div");
-      details.className = "item-details";
-
-      const name = document.createElement("span");
-      name.className = "item-name";
-      name.textContent = item.name;
-      name.title = `${item.name}\n${item.reason || ""}`;
-
-      const meta = document.createElement("div");
-      meta.className = "item-meta";
-
-      const platformClass = (item.platform || "Generic").replace(/\s+/g, "");
-      const tag = document.createElement("span");
-      tag.className = `platform-tag ${platformClass}`;
-      tag.textContent = item.platform || "PDF";
-
-      const size = document.createElement("span");
-      size.textContent = formatBytes(item.size);
-
-      const time = document.createElement("span");
-      time.textContent = `• ${item.timeStr || ""}`;
-
-      meta.appendChild(tag);
-      meta.appendChild(size);
-      meta.appendChild(time);
-
-      details.appendChild(name);
-      details.appendChild(meta);
-      left.appendChild(details);
-
-      // Right Action Buttons Group: Import / Status Tag + DELETE BUTTON
-      const right = document.createElement("div");
-      right.className = "item-right-actions";
-
-      // If item is ready in Vault: SHOW "✓ Ready to Print" tag (DO NOT SHOW + Import PDF!)
-      if (item.isReady) {
-        const readyTag = document.createElement("span");
-        readyTag.className = "status-tag ready";
-        readyTag.textContent = "✓ Ready to Print";
-        readyTag.title = "This label is stored in Vault and ready for 1-click cropping.";
-        right.appendChild(readyTag);
-      } else {
-        // If not yet imported: SHOW "+ Import PDF" button
-        const importBtn = document.createElement("button");
-        importBtn.type = "button";
-        importBtn.className = "import-single-btn";
-        importBtn.innerHTML = "<span>➕</span> Import PDF";
-        importBtn.title = "Pick this PDF from your Downloads folder to activate for 1-click printing";
-        importBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          pendingImportDownload = item;
-
-          // Native File Picker with suggestedName so the exact filename is PRE-SELECTED!
-          if (typeof window.showOpenFilePicker === "function") {
-            try {
-              const [fileHandle] = await window.showOpenFilePicker({
-                suggestedName: item.name,
-                types: [
-                  {
-                    description: "PDF Shipping Label",
-                    accept: {
-                      "application/pdf": [".pdf"],
-                    },
-                  },
-                ],
-                multiple: false,
+        if (isTarget) {
+          try {
+            if (chrome.scripting && chrome.scripting.executeScript) {
+              const injectionResults = await chrome.scripting.executeScript({
+                target: { tabId: t.id },
+                func: () => {
+                  try {
+                    const token =
+                      localStorage.getItem("labelflow_jwt_token") ||
+                      localStorage.getItem("labelflow_token");
+                    const userStr = localStorage.getItem("labelflow_user_profile");
+                    const historyStr = localStorage.getItem("labelflow_local_history_48h");
+                    let user = null;
+                    if (userStr) {
+                      try {
+                        user = JSON.parse(userStr);
+                      } catch {}
+                    }
+                    return { token, user, historyStr };
+                  } catch {
+                    return null;
+                  }
+                },
               });
 
-              if (fileHandle) {
-                const file = await fileHandle.getFile();
-                if (file) {
-                  await processAndImportFile(file, item);
-                  return;
+              if (injectionResults && injectionResults[0] && injectionResults[0].result) {
+                const { token, user, historyStr } = injectionResults[0].result;
+                if (token) {
+                  updateAuthUI({
+                    isLoggedIn: true,
+                    user: user || { name: "Seller" },
+                    token: token,
+                  });
+                }
+                if (historyStr) {
+                  try {
+                    const items = JSON.parse(historyStr);
+                    if (Array.isArray(items) && items.length > 0) {
+                      historyItems = items;
+                      if (historyTabCount) historyTabCount.textContent = String(items.length);
+                      await VaultStorage.syncLocalHistoryItems(items);
+                      if (currentTab === "history") {
+                        renderHistoryList();
+                      }
+                    }
+                  } catch {}
                 }
               }
-            } catch (err) {
-              if (err && err.name === "AbortError") {
-                return; // User cancelled dialog
-              }
-              console.warn("showOpenFilePicker fallback to input:", err);
             }
+          } catch (e) {
+            console.debug("Script injection check:", e);
           }
-
-          singleFileInput.value = "";
-          singleFileInput.click();
-        });
-        right.appendChild(importBtn);
+        }
       }
+    } catch (err) {
+      console.debug("Tab query error:", err);
+    }
+  }
 
-      // DELETE LABEL BUTTON (🗑️) — Present on every card!
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "action-icon-btn danger";
-      deleteBtn.innerHTML = "🗑️";
-      deleteBtn.title = "Delete label (Move to Trash)";
-      deleteBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-
-        // 1. Optimistically remove from in-memory list & DOM immediately!
-        scannedDownloads = scannedDownloads.filter(
-          (it) => it !== item && it.name.toLowerCase().trim() !== item.name.toLowerCase().trim()
-        );
-        card.remove();
-
-        // 2. Decrement Scan count & Increment Trash count immediately
-        if (scanTabCount) {
-          const cur = parseInt(scanTabCount.textContent || "0", 10);
-          scanTabCount.textContent = String(Math.max(0, cur - 1));
-        }
-        if (trashTabCount) {
-          const cur = parseInt(trashTabCount.textContent || "0", 10);
-          trashTabCount.textContent = String(cur + 1);
-        }
-
-        showBanner(`Moved "${item.name}" to Trash.`, "info");
-
-        // 3. Persist move to Trash in IndexedDB
-        const payload = item.vaultId
-          ? item.vaultId
-          : {
-              name: item.name,
-              downloadId: item.downloadId,
-              size: item.size,
-              platform: item.platform,
-            };
-
-        try {
-          await VaultStorage.moveVaultFilesToTrash(payload);
-          chrome.runtime.sendMessage({ action: "UPDATE_VAULT_BADGE" });
-          fetchVaultData(false);
-
-          if (scannedDownloads.length === 0 && scanEmptyState) {
-            scanEmptyState.style.display = "flex";
-          }
-        } catch (err) {
-          console.error("Error moving to trash:", err);
-        }
-      });
-      right.appendChild(deleteBtn);
-
-      // Card click toggles checkbox if ready
-      if (item.isReady && item.vaultId) {
-        card.addEventListener("click", async (e) => {
-          if (e.target !== deleteBtn && !e.target.classList.contains("item-checkbox")) {
-            item.selected = !item.selected;
-            card.classList.toggle("selected", item.selected);
-            const cb = card.querySelector(".item-checkbox");
-            if (cb) cb.checked = item.selected;
-
-            await VaultStorage.updateVaultSelection(item.vaultId, item.selected);
-            chrome.runtime.sendMessage({ action: "UPDATE_VAULT_BADGE" });
-            fetchVaultData(false);
-          }
-        });
+  // --- CTA Button & Badge Synchronization ---
+  function updateCtaButton() {
+    const selectedCount = pendingItems.filter((i) => i.selected).length;
+    if (cropBtnText) {
+      cropBtnText.textContent = `Print Selected (${selectedCount})`;
+    }
+    if (cropSelectedBtn) {
+      cropSelectedBtn.disabled = selectedCount === 0;
+      if (selectedCount > 0) {
+        cropSelectedBtn.classList.remove("disabled-btn");
+      } else {
+        cropSelectedBtn.classList.add("disabled-btn");
       }
+    }
+    if (selectedCountBadge) {
+      selectedCountBadge.textContent = `${selectedCount} / ${pendingItems.length} Selected`;
+    }
 
-      card.appendChild(left);
-      card.appendChild(right);
-      scannedItemsList.appendChild(card);
+    // Dynamic icon badge: strictly represents unprinted pending labels count across all devices!
+    const pendingTotal = pendingItems.length;
+    if (pendingTabCount) pendingTabCount.textContent = String(pendingTotal);
+    chrome.runtime.sendMessage({
+      action: "UPDATE_VAULT_BADGE",
+      count: pendingTotal,
     });
   }
 
-  // Render Printed Labels List (TAB 2)
-  function renderPrintedList(items) {
-    if (!printedItemsList) return;
-    if (items.length === 0) {
-      if (printedEmptyState) printedEmptyState.style.display = "flex";
-      printedItemsList.innerHTML = "";
+  // --- Render Pending Labels Queue (TAB 1) ---
+  function renderPendingList() {
+    if (!pendingItemsList) return;
+
+    if (pendingItems.length === 0) {
+      if (pendingEmptyState) pendingEmptyState.style.display = "flex";
+      pendingItemsList.innerHTML = "";
+      updateCtaButton();
       return;
     }
 
-    if (printedEmptyState) printedEmptyState.style.display = "none";
-    printedItemsList.innerHTML = "";
+    if (pendingEmptyState) pendingEmptyState.style.display = "none";
+    pendingItemsList.innerHTML = "";
 
-    items.forEach((item) => {
+    pendingItems.forEach((item, index) => {
       const card = document.createElement("div");
-      card.className = "item-card printed-card";
+      card.className = `queue-card ${item.selected ? "selected" : ""}`;
 
-      const left = document.createElement("div");
-      left.className = "item-left";
+      // Left Column: Checkbox + Content
+      const cardLeft = document.createElement("div");
+      cardLeft.className = "card-left";
 
-      const details = document.createElement("div");
-      details.className = "item-details";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "card-checkbox";
+      cb.checked = Boolean(item.selected);
+      cb.title = "Select to print & crop";
+      cb.addEventListener("change", async (e) => {
+        item.selected = e.target.checked;
+        card.classList.toggle("selected", item.selected);
+        if (item.id && !item.isCloud) {
+          await VaultStorage.updateVaultSelection(item.id, item.selected);
+        }
+        updateCtaButton();
+      });
+      cardLeft.appendChild(cb);
 
-      const name = document.createElement("span");
-      name.className = "item-name";
-      name.textContent = item.name;
-      name.title = item.name;
+      const content = document.createElement("div");
+      content.className = "card-content";
+
+      const title = document.createElement("span");
+      title.className = "card-title";
+      title.textContent = item.name;
+      title.title = item.name;
+      content.appendChild(title);
 
       const meta = document.createElement("div");
-      meta.className = "item-meta";
+      meta.className = "card-meta";
 
-      const platformClass = (item.platform || "Generic").replace(/\s+/g, "");
+      const platformClass = (item.platform || "Meesho").replace(/\s+/g, "");
+      const pill = document.createElement("span");
+      pill.className = `platform-pill ${platformClass}`;
+      pill.textContent = item.platform || "Meesho";
+      meta.appendChild(pill);
+
+      // Cloud Origin Tag (indicates multi-device synced file)
+      if (item.isCloud) {
+        const cloudTag = document.createElement("span");
+        cloudTag.className = "cloud-tag";
+        cloudTag.textContent = "☁️ Cloud";
+        cloudTag.title = "Uploaded from your account. Synced across all your browsers.";
+        meta.appendChild(cloudTag);
+      }
+
+      const sizeSpan = document.createElement("span");
+      sizeSpan.textContent = formatBytes(item.size);
+      meta.appendChild(sizeSpan);
+
+      const timeText = formatRelativeOrDate(item.dateAdded || item.uploaded_at || Date.now());
+      if (timeText) {
+        const timeSpan = document.createElement("span");
+        timeSpan.textContent = `• ${timeText}`;
+        meta.appendChild(timeSpan);
+      }
+
+      content.appendChild(meta);
+      cardLeft.appendChild(content);
+
+      // Right Column: Ready status + Delete
+      const cardRight = document.createElement("div");
+      cardRight.className = "card-right";
+
       const tag = document.createElement("span");
-      tag.className = `platform-tag ${platformClass}`;
-      tag.textContent = item.platform || "PDF";
+      tag.className = "tag-ready";
+      tag.textContent = "✓ Ready";
+      cardRight.appendChild(tag);
 
-      const size = document.createElement("span");
-      size.textContent = formatBytes(item.size);
-
-      const time = document.createElement("span");
-      time.textContent = `• Printed ${formatTimeAgo(item.printedAt)}`;
-
-      meta.appendChild(tag);
-      meta.appendChild(size);
-      meta.appendChild(time);
-
-      details.appendChild(name);
-      details.appendChild(meta);
-      left.appendChild(details);
-
-      // Right actions: Re-Print button & Delete to Trash button
-      const right = document.createElement("div");
-      right.className = "item-right-actions";
-
-      const reprintBtn = document.createElement("button");
-      reprintBtn.type = "button";
-      reprintBtn.className = "action-pill-btn";
-      reprintBtn.innerHTML = "🔄 Re-Print";
-      reprintBtn.title = "Restore this label back to Scan Downloads to print again";
-      reprintBtn.addEventListener("click", async (e) => {
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn-delete-row";
+      delBtn.innerHTML = "✕";
+      delBtn.title = "Remove from list";
+      delBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (item.hasBlob) {
-          await VaultStorage.reprintVaultFiles([item.id]);
-          showBanner(`Restored "${item.name}" to Scan Downloads ready to print!`, "success");
-          switchTab("scan");
-          triggerScan(false);
-          fetchVaultData(false);
+
+        // 1. If cloud item, delete from server
+        if (item.isCloud && item.fileId && currentAuthState && currentAuthState.token) {
+          try {
+            fetch(`${activeApiBase}/cloud-vault/${item.fileId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${currentAuthState.token}` },
+            }).catch(() => {});
+          } catch {}
+        }
+
+        // 2. If stored locally, move to trash in IndexedDB
+        if (item.id && !item.isCloud) {
+          await VaultStorage.moveVaultFilesToTrash([item.id]);
+        }
+
+        pendingItems.splice(index, 1);
+        renderPendingList();
+        updateCtaButton();
+        showBanner(`Removed "${item.name}" from pending list.`, "info");
+      });
+      cardRight.appendChild(delBtn);
+
+      card.appendChild(cardLeft);
+      card.appendChild(cardRight);
+
+      // Clicking card toggles selection
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button") || e.target.closest("input")) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event("change"));
+      });
+
+      pendingItemsList.appendChild(card);
+    });
+
+    updateCtaButton();
+  }
+
+  // --- Render Printed History (TAB 2) ---
+  function renderHistoryList() {
+    if (!historyItemsList) return;
+
+    if (historyItems.length === 0) {
+      if (historyEmptyState) historyEmptyState.style.display = "flex";
+      historyItemsList.innerHTML = "";
+      if (historyTabCount) historyTabCount.textContent = "0";
+      return;
+    }
+
+    if (historyEmptyState) historyEmptyState.style.display = "none";
+    historyItemsList.innerHTML = "";
+    if (historyTabCount) historyTabCount.textContent = String(historyItems.length);
+
+    historyItems.forEach((item, index) => {
+      const row = document.createElement("div");
+      row.className = `history-row ${item.selected ? "selected" : ""}`;
+
+      // Checkbox for bulk re-print
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "card-checkbox";
+      cb.checked = Boolean(item.selected);
+      cb.title = "Select to re-print";
+      cb.addEventListener("change", (e) => {
+        item.selected = e.target.checked;
+        row.classList.toggle("selected", item.selected);
+      });
+      row.appendChild(cb);
+
+      // Icon Box
+      const iconBox = document.createElement("div");
+      iconBox.className = "history-icon-box";
+      iconBox.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+        </svg>
+      `;
+      row.appendChild(iconBox);
+
+      // Content Col: Name, metadata (matches website 1:1)
+      const content = document.createElement("div");
+      content.className = "card-content";
+
+      const title = document.createElement("span");
+      title.className = "history-title";
+      title.textContent = item.filename || item.name || "cropped_labels.pdf";
+      title.title = title.textContent;
+      content.appendChild(title);
+
+      const meta = document.createElement("div");
+      meta.className = "history-meta";
+
+      const timeText = formatRelativeOrDate(item.printedAt || item.created_at || item.dateAdded);
+      const labelsText = item.total_labels ? `${item.total_labels} Labels` : "Cropped Labels";
+      const sizeText = item.formatted_size || "Thermal 4×6";
+      const badgeText = item.type_badge || "Label Only";
+
+      const timeSpan = document.createElement("span");
+      timeSpan.textContent = timeText;
+
+      const dot1 = document.createElement("span");
+      dot1.textContent = "•";
+
+      const sizeSpan = document.createElement("span");
+      sizeSpan.textContent = sizeText;
+
+      const dot2 = document.createElement("span");
+      dot2.textContent = "•";
+
+      const labelsSpan = document.createElement("span");
+      labelsSpan.textContent = labelsText;
+
+      const badgeSpan = document.createElement("span");
+      badgeSpan.className = "badge-label-only";
+      badgeSpan.textContent = badgeText;
+
+      meta.appendChild(timeSpan);
+      meta.appendChild(dot1);
+      meta.appendChild(sizeSpan);
+      meta.appendChild(dot2);
+      meta.appendChild(labelsSpan);
+      meta.appendChild(badgeSpan);
+
+      content.appendChild(meta);
+      row.appendChild(content);
+
+      // Actions Col: View, Download, Delete
+      const actions = document.createElement("div");
+      actions.className = "row-action-btns";
+
+      if (item.view_url) {
+        const viewBtn = document.createElement("a");
+        viewBtn.className = "action-icon-btn view";
+        viewBtn.title = "View cropped PDF";
+        viewBtn.href = item.view_url;
+        viewBtn.target = "_blank";
+        viewBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        `;
+        actions.appendChild(viewBtn);
+      }
+
+      if (item.download_url) {
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "action-icon-btn download";
+        dlBtn.title = "Download cropped PDF";
+        dlBtn.href = item.download_url;
+        dlBtn.download = item.filename || "cropped_labels.pdf";
+        dlBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        `;
+        actions.appendChild(dlBtn);
+      }
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "action-icon-btn delete";
+      delBtn.title = "Delete from history";
+      delBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+      `;
+      delBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await VaultStorage.moveVaultFilesToTrash([item.id || item.job_id]);
+        historyItems.splice(index, 1);
+        renderHistoryList();
+        showBanner(`Removed "${item.filename || item.name}" from history.`, "info");
+      });
+      actions.appendChild(delBtn);
+
+      row.appendChild(actions);
+      historyItemsList.appendChild(row);
+    });
+  }
+
+  // --- Cross-Browser Server Cloud Vault Sync Engine ---
+  let isSyncing = false;
+  async function syncCloudVaultState() {
+    if (isSyncing) return;
+    if (!currentAuthState || !currentAuthState.isLoggedIn || !currentAuthState.token) return;
+
+    isSyncing = true;
+    try {
+      const resp = await fetch(`${activeApiBase}/cloud-vault/sync`, {
+        headers: {
+          Authorization: `Bearer ${currentAuthState.token}`,
+        },
+      });
+
+      if (!resp || !resp.ok) {
+        isSyncing = false;
+        return;
+      }
+
+      const syncData = await resp.json();
+      const pending = Array.isArray(syncData.pending) ? syncData.pending : [];
+      const printedFilenames = Array.isArray(syncData.printed_filenames) ? syncData.printed_filenames : [];
+      const serverHistory = Array.isArray(syncData.history) ? syncData.history : [];
+
+      // 1. Determine latest print timestamp across history batches
+      let latestPrintTime = 0;
+      for (const h of serverHistory) {
+        const t = Number(h.printedAt || h.created_at || 0);
+        if (t > latestPrintTime) latestPrintTime = t;
+      }
+
+      // 2. Build exact set of printed filenames (exact lowercase names & basenames)
+      const printedSet = new Set();
+      for (const fn of printedFilenames) {
+        if (!fn) continue;
+        const clean = fn.toLowerCase().trim();
+        printedSet.add(clean);
+        const base = clean.split(/[/\\]/).pop();
+        if (base) printedSet.add(base);
+      }
+      for (const h of serverHistory) {
+        if (Array.isArray(h.original_files)) {
+          for (const orig of h.original_files) {
+            if (!orig) continue;
+            const clean = orig.toLowerCase().trim();
+            printedSet.add(clean);
+            const base = clean.split(/[/\\]/).pop();
+            if (base) printedSet.add(base);
+          }
+        }
+      }
+
+      // 3. Cross-device acknowledgment: Check local ready items
+      // ONLY mark a local ready file as printed if it was added BEFORE the print job occurred!
+      // If user freshly added or re-added it after latestPrintTime, it is a new pending upload.
+      const localStored = await VaultStorage.getStoredVaultFiles(false);
+      const localToPrint = [];
+
+      for (const it of localStored) {
+        const n = (it.name || "").toLowerCase().trim();
+        const base = n.split(/[/\\]/).pop();
+        const isMatch = printedSet.has(n) || (base && printedSet.has(base));
+
+        if (isMatch) {
+          const itemTime = Number(it.dateAdded || 0);
+          if (latestPrintTime > 0 && itemTime > 0 && itemTime <= latestPrintTime) {
+            localToPrint.push(it.id || it.name);
+          }
+        }
+      }
+
+      if (localToPrint.length > 0) {
+        await VaultStorage.moveVaultFilesToPrinted(localToPrint);
+      }
+
+      // 4. Build active Pending list: ALWAYS preserve all active ready items in IndexedDB!
+      const activePendingMap = new Map();
+      const updatedLocal = await VaultStorage.getStoredVaultFiles(false);
+
+      for (const it of updatedLocal) {
+        const n = (it.name || "").toLowerCase().trim();
+        activePendingMap.set(n, {
+          ...it,
+          isReady: true,
+          isStored: true,
+          isCloud: false,
+          selected: it.selected !== undefined ? it.selected : true,
+        });
+      }
+
+      // 5. Merge unprinted pending files from Server Cloud Queue
+      for (const cq of pending) {
+        const fn = (cq.filename || "").toLowerCase().trim();
+        if (activePendingMap.has(fn)) {
+          const existing = activePendingMap.get(fn);
+          existing.isCloud = true;
+          existing.fileId = cq.file_id;
         } else {
-          showBanner(`File bytes missing. Please re-import "${item.name}" to print again.`, "info");
-          pendingImportDownload = { name: item.name, platform: item.platform, downloadId: item.downloadId };
-          singleFileInput.value = "";
-          singleFileInput.click();
+          activePendingMap.set(fn, {
+            id: cq.file_id,
+            fileId: cq.file_id,
+            name: cq.filename,
+            size: cq.file_size,
+            platform: cq.platform,
+            status: "ready",
+            isReady: true,
+            isStored: false,
+            isCloud: true,
+            selected: true,
+            dateAdded: new Date(cq.uploaded_at).getTime(),
+          });
         }
-      });
-      right.appendChild(reprintBtn);
+      }
 
-      const trashBtn = document.createElement("button");
-      trashBtn.type = "button";
-      trashBtn.className = "action-icon-btn danger";
-      trashBtn.innerHTML = "🗑️";
-      trashBtn.title = "Move to Trash";
-      trashBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        await VaultStorage.moveVaultFilesToTrash([item.id]);
-        showBanner(`Moved "${item.name}" to Trash.`, "info");
-        fetchVaultData(false);
-        triggerScan(false);
-      });
-      right.appendChild(trashBtn);
+      pendingItems = Array.from(activePendingMap.values());
 
-      card.appendChild(left);
-      card.appendChild(right);
-      printedItemsList.appendChild(card);
+      // 6. Update Printed History tab from Server
+      if (serverHistory.length > 0) {
+        historyItems = serverHistory;
+        await VaultStorage.syncLocalHistoryItems(serverHistory);
+      } else {
+        const localPrinted = await VaultStorage.getPrintedVaultFiles();
+        historyItems = localPrinted || [];
+      }
+
+      if (historyTabCount) historyTabCount.textContent = String(historyItems.length);
+      if (pendingTabCount) pendingTabCount.textContent = String(pendingItems.length);
+
+      // 7. Refresh active UI tab
+      if (currentTab === "pending") {
+        renderPendingList();
+      } else {
+        renderHistoryList();
+      }
+      updateCtaButton();
+    } catch (err) {
+      console.debug("syncCloudVaultState error:", err);
+    } finally {
+      isSyncing = false;
+    }
+  }
+
+  // --- Core Loader: Merges Local Stored Files + Server Cloud Queue (Multi-Device) ---
+  async function loadExtensionData(showLoading = false) {
+    try {
+      // 1. FAST PATH: Immediately render local files in 5ms!
+      const localStored = await VaultStorage.getStoredVaultFiles(false);
+      const localMapped = (localStored || []).map((it) => ({
+        ...it,
+        isReady: true,
+        isStored: true,
+        isCloud: false,
+        selected: it.selected !== undefined ? it.selected : true,
+      }));
+
+      pendingItems = [...localMapped];
+
+      if (currentTab === "pending") {
+        renderPendingList();
+      } else {
+        renderHistoryList();
+      }
+      updateCtaButton();
+
+      // 2. CONCURRENT BACKGROUND SYNC: Check tabs, auth, and cloud queue without blocking the UI!
+      (async () => {
+        await Promise.all([syncFromOpenTabs(), resolveApiBase()]);
+        await syncCloudVaultState();
+      })();
+    } catch (err) {
+      console.error("loadExtensionData error:", err);
+    }
+  }
+
+  window.addEventListener("focus", () => {
+    syncCloudVaultState();
+  });
+
+  // --- Upload PDF Handlers ---
+  function triggerUploadDialog() {
+    if (pdfFileInput) {
+      pdfFileInput.value = "";
+      pdfFileInput.click();
+    }
+  }
+
+  if (headerUploadBtn) headerUploadBtn.addEventListener("click", triggerUploadDialog);
+  if (emptyUploadBtn) emptyUploadBtn.addEventListener("click", triggerUploadDialog);
+  if (addMoreBtn) addMoreBtn.addEventListener("click", triggerUploadDialog);
+
+  // Helper: Prompts sleek modal dialog for already printed files
+  function promptAlreadyPrintedConfirmation(printedFileNames) {
+    return new Promise((resolve) => {
+      if (!duplicateModal || !duplicateModalMessage || !duplicateModalYesBtn || !duplicateModalNoBtn) {
+        const msg =
+          printedFileNames.length === 1
+            ? `Ye file already print ho chuki hai: "${printedFileNames[0]}".\n\nKya aap isko Pending Labels me add karna chahte hain?`
+            : `${printedFileNames.length} files already print ho chuki hain:\n• ${printedFileNames.join("\n• ")}\n\nKya aap inko Pending Labels me add karna chahte hain?`;
+        resolve(window.confirm(msg));
+        return;
+      }
+
+      if (printedFileNames.length === 1) {
+        duplicateModalMessage.innerHTML = `File <strong>"${printedFileNames[0]}"</strong> already print ho chuki hai.<br><br>Kya aap isko <strong>Pending Labels</strong> me add karke re-print karna chahte hain?`;
+        if (duplicateModalFilesList) duplicateModalFilesList.style.display = "none";
+      } else {
+        duplicateModalMessage.innerHTML = `<strong>${printedFileNames.length} files</strong> already print ho chuki hain.<br><br>Kya aap inko <strong>Pending Labels</strong> me add karke re-print karna chahte hain?`;
+        if (duplicateModalFilesList) {
+          duplicateModalFilesList.innerHTML = printedFileNames
+            .map((fn) => `<div class="modal-file-pill">• ${fn}</div>`)
+            .join("");
+          duplicateModalFilesList.style.display = "flex";
+        }
+      }
+
+      duplicateModal.style.display = "flex";
+
+      const handleYes = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      const handleNo = () => {
+        cleanup();
+        resolve(false);
+      };
+
+      const cleanup = () => {
+        duplicateModal.style.display = "none";
+        duplicateModalYesBtn.removeEventListener("click", handleYes);
+        duplicateModalNoBtn.removeEventListener("click", handleNo);
+      };
+
+      duplicateModalYesBtn.addEventListener("click", handleYes);
+      duplicateModalNoBtn.addEventListener("click", handleNo);
     });
   }
 
-  // Render Trash List (TAB 3)
-  function renderTrashList(items) {
-    if (!trashItemsList) return;
-    if (items.length === 0) {
-      if (trashEmptyState) trashEmptyState.style.display = "flex";
-      trashItemsList.innerHTML = "";
-      return;
-    }
-
-    if (trashEmptyState) trashEmptyState.style.display = "none";
-    trashItemsList.innerHTML = "";
-
-    items.forEach((item) => {
-      const card = document.createElement("div");
-      card.className = "item-card trash-card";
-
-      const left = document.createElement("div");
-      left.className = "item-left";
-
-      const details = document.createElement("div");
-      details.className = "item-details";
-
-      const name = document.createElement("span");
-      name.className = "item-name strike";
-      name.textContent = item.name;
-      name.title = item.name;
-
-      const meta = document.createElement("div");
-      meta.className = "item-meta";
-
-      const platformClass = (item.platform || "Generic").replace(/\s+/g, "");
-      const tag = document.createElement("span");
-      tag.className = `platform-tag ${platformClass}`;
-      tag.textContent = item.platform || "PDF";
-
-      const size = document.createElement("span");
-      size.textContent = formatBytes(item.size);
-
-      const time = document.createElement("span");
-      time.textContent = `• Trashed ${formatTimeAgo(item.trashedAt)}`;
-
-      meta.appendChild(tag);
-      meta.appendChild(size);
-      meta.appendChild(time);
-
-      details.appendChild(name);
-      details.appendChild(meta);
-      left.appendChild(details);
-
-      // Right actions: Restore & Permanent Delete
-      const right = document.createElement("div");
-      right.className = "trash-actions";
-
-      const restoreBtn = document.createElement("button");
-      restoreBtn.type = "button";
-      restoreBtn.className = "action-pill-btn";
-      restoreBtn.innerHTML = "↩️ Restore";
-      restoreBtn.title = "Restore label back to Scan Downloads";
-      restoreBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        await VaultStorage.restoreVaultFilesFromTrash([item.id]);
-        showBanner(`Restored "${item.name}" to Scan Downloads.`, "success");
-        fetchVaultData(false);
-        triggerScan(false);
-      });
-      right.appendChild(restoreBtn);
-
-      const deletePermBtn = document.createElement("button");
-      deletePermBtn.type = "button";
-      deletePermBtn.className = "action-icon-btn danger";
-      deletePermBtn.innerHTML = "✕";
-      deletePermBtn.title = "Delete permanently from Vault";
-      deletePermBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) {
-          await VaultStorage.deleteVaultFilesPermanently([item.id]);
-          showBanner(`Permanently deleted "${item.name}".`, "info");
-          fetchVaultData(false);
-          triggerScan(false);
-        }
-      });
-      right.appendChild(deletePermBtn);
-
-      card.appendChild(left);
-      card.appendChild(right);
-      trashItemsList.appendChild(card);
-    });
-  }
-
-  // Core Import Logic: Validates, stores in Vault, and updates card immediately
-  async function processAndImportFile(file, downloadItem) {
-    if (!file) return;
-
-    // Strict Validation: Detect invalid/non-label files (CV, Resume, Statement, Bill, Generic PDF)
-    const classification = VaultStorage.classifyDownloadItem({ filename: file.name });
-    if (!classification.isEligible && !classification.isReviewNeeded) {
-      showBanner(
-        `⚠️ "${file.name}" valid shipping label nahi hai! Kripya sirf Meesho, Flipkart, Snapdeal, Amazon ya Myntra ka shipping label select karein.`,
-        "error"
-      );
-      return;
-    }
-
-    const targetPlatform = classification.isEligible
-      ? classification.platform
-      : (downloadItem && downloadItem.platform) || "Shipping Label";
-    const downloadId = downloadItem ? downloadItem.downloadId : null;
-    const downloadName = downloadItem ? downloadItem.name : file.name;
-
-    showBanner(`Importing "${file.name}" into Vault...`, "info");
+  // Unified File Upload Handler with Duplicate Printed Detection
+  async function handleUploadFiles(files) {
+    if (!files || files.length === 0) return;
+    hideBanner();
 
     try {
-      const buffer = await file.arrayBuffer();
-      const base64 = bufferToBase64(buffer);
-      const blob = new Blob([buffer], { type: file.type || "application/pdf" });
+      // 1. Collect all known printed filenames across local vault & server history
+      const printedNameSet = new Set();
 
-      const addedRecords = await VaultStorage.addFilesToVault([
-        {
+      const localPrinted = await VaultStorage.getPrintedVaultFiles();
+      for (const pf of (localPrinted || [])) {
+        if (pf.name) {
+          printedNameSet.add(pf.name.toLowerCase().trim());
+          const b = pf.name.split(/[/\\]/).pop();
+          if (b) printedNameSet.add(b.toLowerCase().trim());
+        }
+        if (pf.filename) {
+          printedNameSet.add(pf.filename.toLowerCase().trim());
+          const b = pf.filename.split(/[/\\]/).pop();
+          if (b) printedNameSet.add(b.toLowerCase().trim());
+        }
+        if (Array.isArray(pf.original_files)) {
+          for (const orig of pf.original_files) {
+            if (orig) {
+              printedNameSet.add(orig.toLowerCase().trim());
+              const b = orig.split(/[/\\]/).pop();
+              if (b) printedNameSet.add(b.toLowerCase().trim());
+            }
+          }
+        }
+      }
+
+      for (const h of (historyItems || [])) {
+        if (h.name) printedNameSet.add(h.name.toLowerCase().trim());
+        if (h.filename) printedNameSet.add(h.filename.toLowerCase().trim());
+        if (Array.isArray(h.original_files)) {
+          for (const orig of h.original_files) {
+            if (orig) {
+              printedNameSet.add(orig.toLowerCase().trim());
+              const b = orig.split(/[/\\]/).pop();
+              if (b) printedNameSet.add(b.toLowerCase().trim());
+            }
+          }
+        }
+      }
+
+      // 2. Classify uploaded files into: freshFiles and alreadyPrintedFiles
+      const alreadyPrintedFiles = [];
+      const freshFiles = [];
+
+      for (const file of files) {
+        const rawName = file.name || "";
+        const lowerName = rawName.toLowerCase().trim();
+        const baseName = lowerName.split(/[/\\]/).pop();
+
+        const isPrinted = printedNameSet.has(lowerName) || (baseName && printedNameSet.has(baseName));
+
+        if (isPrinted) {
+          alreadyPrintedFiles.push(file);
+        } else {
+          freshFiles.push(file);
+        }
+      }
+
+      let filesToProcess = [];
+
+      // 3. If any file is already printed, show confirmation popup!
+      if (alreadyPrintedFiles.length > 0) {
+        const names = alreadyPrintedFiles.map((f) => f.name);
+        const shouldAddPrinted = await promptAlreadyPrintedConfirmation(names);
+
+        if (shouldAddPrinted) {
+          // User clicked YES -> Add both fresh files and already printed files to Pending
+          filesToProcess = [...freshFiles, ...alreadyPrintedFiles];
+        } else {
+          // User clicked NO -> Do NOT upload / add the already printed files
+          if (freshFiles.length > 0) {
+            filesToProcess = [...freshFiles];
+            showBanner(`Printed file(s) skipped. Adding ${freshFiles.length} fresh file(s)...`, "info");
+          } else {
+            showBanner("Upload cancelled — already printed file(s) not added.", "info");
+            return;
+          }
+        }
+      } else {
+        filesToProcess = files;
+      }
+
+      if (filesToProcess.length === 0) return;
+
+      // 4. Ingest accepted files into local Vault and Cloud Queue
+      const cloudFormData = new FormData();
+      const readPromises = filesToProcess.map(async (file) => {
+        const buffer = await file.arrayBuffer();
+        const base64 = bufferToBase64(buffer);
+        const blob = new Blob([buffer], { type: file.type || "application/pdf" });
+        const classification = VaultStorage.classifyDownloadItem({ filename: file.name });
+        const platform = classification.isEligible ? classification.platform : "Shipping Label";
+
+        cloudFormData.append("files", file);
+
+        return {
           name: file.name,
-          matchedName: downloadName,
           buffer: buffer,
           base64: base64,
           blob: blob,
           size: file.size,
           type: file.type || "application/pdf",
-          platform: targetPlatform,
-          downloadId: downloadId,
-        },
-      ]);
+          platform: platform,
+        };
+      });
 
-      const added = addedRecords[0];
+      const itemsToSave = await Promise.all(readPromises);
 
-      chrome.runtime.sendMessage({ action: "UPDATE_VAULT_BADGE" });
-
-      // Update in-memory scannedDownloads so the card transforms IMMEDIATELY
-      const targetMatchName = (downloadName || file.name).toLowerCase().trim();
-      const match = scannedDownloads.find(
-        (it) =>
-          (downloadId && it.downloadId === downloadId) ||
-          it.name.toLowerCase().trim() === targetMatchName
-      );
-      if (match) {
-        match.isReady = true;
-        match.isStored = true;
-        match.vaultId = added ? added.id : generateVaultId();
-        match.selected = true;
-        match.size = file.size;
-      }
-
-      pendingImportDownload = null;
-      showBanner(`✓ Successfully imported "${file.name}"! Ready to print.`, "success");
-
-      // Re-render immediately: + Import button vanishes, ✓ Ready to Print appears!
-      renderScannedList();
-      fetchVaultData(false);
-    } catch (err) {
-      showBanner("Error reading PDF file: " + err.message, "error");
-    }
-  }
-
-  // Handle Single File Import for a Scanned Item (Fallback for standard file input)
-  if (singleFileInput) {
-    singleFileInput.addEventListener("change", async (e) => {
-      const file = (e.target.files || [])[0];
-      if (file) {
-        await processAndImportFile(file, pendingImportDownload);
-      }
-    });
-  }
-
-  // Multi-File Ingestion via Header "➕ Add PDF" Button
-  function triggerFileInput() {
-    pdfFileInput.value = "";
-    pdfFileInput.click();
-  }
-
-  if (headerAddBtn) headerAddBtn.addEventListener("click", triggerFileInput);
-
-  pdfFileInput.addEventListener("change", async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
-    hideBanner();
-
-    // Validate each file strictly
-    const validFiles = [];
-    const invalidFiles = [];
-
-    for (const f of files) {
-      const cls = VaultStorage.classifyDownloadItem({ filename: f.name });
-      if (cls.isEligible || cls.isReviewNeeded) {
-        validFiles.push({ file: f, classification: cls });
-      } else {
-        invalidFiles.push(f.name);
-      }
-    }
-
-    if (invalidFiles.length > 0) {
-      showBanner(
-        `⚠️ "${invalidFiles.slice(0, 2).join(", ")}" valid shipping label nahi hai! Kripya sirf Meesho, Flipkart, Snapdeal, Amazon ya Myntra labels upload karein.`,
-        "error"
-      );
-      if (validFiles.length === 0) return;
-    }
-
-    showBanner(`Storing ${validFiles.length} label PDF(s) into Vault...`, "info");
-
-    try {
-      const itemsToSave = await Promise.all(
-        validFiles.map(async ({ file, classification }) => {
-          const buffer = await file.arrayBuffer();
-          const base64 = bufferToBase64(buffer);
-          const blob = new Blob([buffer], { type: file.type || "application/pdf" });
-          return {
-            name: file.name,
-            buffer: buffer,
-            base64: base64,
-            blob: blob,
-            size: file.size,
-            type: file.type || "application/pdf",
-            platform: classification.isEligible ? classification.platform : "Shipping Label",
-          };
-        })
-      );
-
+      // Save locally and immediately render in 10ms!
       const added = await VaultStorage.addFilesToVault(itemsToSave);
-      chrome.runtime.sendMessage({ action: "UPDATE_VAULT_BADGE" });
+      showBanner(`✓ Added ${added.length} shipping label PDF(s) to Pending Labels!`, "success");
+      switchTab("pending");
+      await loadExtensionData(false);
 
-      showBanner(
-        `✓ Successfully stored ${added.length} shipping label(s)! Ready to print.`,
-        "success"
-      );
-
-      // Re-scan and update so uploaded files are listed right here in this list!
-      triggerScan(false);
-      fetchVaultData(false);
+      // Background cloud upload without freezing UI
+      if (currentAuthState && currentAuthState.isLoggedIn && currentAuthState.token) {
+        fetch(`${activeApiBase}/cloud-vault/upload`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${currentAuthState.token}`,
+          },
+          body: cloudFormData,
+        })
+          .then((r) => r.ok && loadExtensionData(false))
+          .catch(() => {});
+      }
     } catch (err) {
-      showBanner("Error saving selected files: " + err.message, "error");
+      showBanner("Error saving PDF files: " + err.message, "error");
     }
-  });
+  }
 
-  // Header Scan Button
-  if (headerScanBtn) {
-    headerScanBtn.addEventListener("click", () => {
-      switchTab("scan");
-      triggerScan(true);
+  // Ingest Selected PDF Files
+  if (pdfFileInput) {
+    pdfFileInput.addEventListener("change", (e) => {
+      const files = Array.from(e.target.files || []);
+      pdfFileInput.value = "";
+      handleUploadFiles(files);
     });
   }
 
-  // Dashboard Rescan Button
-  if (dashboardRescanBtn) {
-    dashboardRescanBtn.addEventListener("click", () => triggerScan(true));
-  }
-
-  // Empty State Scan Button
-  if (scanEmptyActionBtn) {
-    scanEmptyActionBtn.addEventListener("click", () => triggerScan(true));
-  }
-
-  // Refresh
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", () => {
-      refreshBtn.classList.add("spinning");
-      triggerScan(true);
-      fetchVaultData(false);
-      setTimeout(() => refreshBtn.classList.remove("spinning"), 600);
+  // Support Drag and Drop onto Popup Window
+  const popupContainer = document.querySelector(".popup-container");
+  if (popupContainer) {
+    popupContainer.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    popupContainer.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
+        f.name.toLowerCase().endsWith(".pdf")
+      );
+      if (files.length > 0) {
+        handleUploadFiles(files);
+      }
     });
   }
 
-  // Select All Ready Labels
+  // --- Pending Queue Selection Actions ---
   if (selectAllBtn) {
     selectAllBtn.addEventListener("click", async () => {
+      pendingItems.forEach((i) => (i.selected = true));
       await VaultStorage.setAllVaultSelection(true);
-      scannedDownloads.forEach((it) => {
-        if (it.isReady) it.selected = true;
-      });
-      renderScannedList();
-      fetchVaultData(false);
+      renderPendingList();
     });
   }
 
-  // Deselect All
   if (deselectAllBtn) {
     deselectAllBtn.addEventListener("click", async () => {
+      pendingItems.forEach((i) => (i.selected = false));
       await VaultStorage.setAllVaultSelection(false);
-      scannedDownloads.forEach((it) => {
-        if (it.isReady) it.selected = false;
-      });
-      renderScannedList();
-      fetchVaultData(false);
+      renderPendingList();
     });
   }
 
-  // Move all Printed to Trash
-  if (trashAllPrintedBtn) {
-    trashAllPrintedBtn.addEventListener("click", async () => {
-      if (printedVaultItems.length === 0) return;
-      const ids = printedVaultItems.map((i) => i.id);
-      await VaultStorage.moveVaultFilesToTrash(ids);
-      showBanner(`Moved ${ids.length} printed label(s) to Trash.`, "info");
-      fetchVaultData(false);
-    });
-  }
-
-  // Empty Trash
-  if (emptyTrashBtn) {
-    emptyTrashBtn.addEventListener("click", async () => {
-      if (trashVaultItems.length === 0) return;
-      if (confirm(`Permanently delete all ${trashVaultItems.length} item(s) in Trash?`)) {
-        await VaultStorage.emptyAllVaultTrash();
-        showBanner("Trash emptied successfully.", "success");
-        fetchVaultData(false);
-        triggerScan(false);
-      }
-    });
-  }
-
-  // Open Webpage Link
-  if (homeLink) {
-    homeLink.addEventListener("click", (e) => {
-      e.preventDefault();
-      chrome.tabs.create({ url: "https://labelcropper.prayxis.in/#generator" });
-      window.close();
-    });
-  }
-
-  // Main CTA: Print / Crop Selected with Login Rule Enforcement
-  if (cropSelectedBtn) {
-    cropSelectedBtn.addEventListener("click", async () => {
-      // 0. Double-check live cookies so logged-in users NEVER get redirected to /login
-      if (!currentAuthState || !currentAuthState.isLoggedIn) {
-        try {
-          const cookies = await chrome.cookies.getAll({ name: "labelflow_token" });
-          if (cookies && cookies.length > 0 && cookies[0].value) {
-            currentAuthState = { isLoggedIn: true, token: cookies[0].value };
-            updateAuthUI(currentAuthState);
-          }
-        } catch {}
-      }
-
-      // 1. Strict Gatekeeper: Only redirect if genuinely not logged in
-      if (!currentAuthState || !currentAuthState.isLoggedIn) {
-        showBanner("🔒 Login Required: PDF upload & auto-crop use karne ke liye pehle login karein (Free Account).", "error");
-        chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
+  if (trashSelectedBtn) {
+    trashSelectedBtn.addEventListener("click", async () => {
+      const selected = pendingItems.filter((i) => i.selected);
+      if (selected.length === 0) {
+        showBanner("Please select at least 1 label to delete.", "info");
         return;
       }
 
-      const selected = readyVaultItems.filter((i) => i.selected);
+      // Delete cloud items
+      if (currentAuthState && currentAuthState.token) {
+        for (const it of selected) {
+          if (it.isCloud && it.fileId) {
+            fetch(`${activeApiBase}/cloud-vault/${it.fileId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${currentAuthState.token}` },
+            }).catch(() => {});
+          }
+        }
+      }
+
+      // Delete local items
+      const localIds = selected.filter((it) => !it.isCloud && it.id).map((it) => it.id);
+      if (localIds.length > 0) {
+        await VaultStorage.moveVaultFilesToTrash(localIds);
+      }
+
+      pendingItems = pendingItems.filter((i) => !i.selected);
+      renderPendingList();
+      showBanner(`Removed ${selected.length} label(s) from pending list.`, "info");
+    });
+  }
+
+  // --- History Selection Actions ---
+  if (selectAllHistoryBtn) {
+    selectAllHistoryBtn.addEventListener("click", () => {
+      historyItems.forEach((i) => (i.selected = true));
+      renderHistoryList();
+    });
+  }
+
+  if (deselectAllHistoryBtn) {
+    deselectAllHistoryBtn.addEventListener("click", () => {
+      historyItems.forEach((i) => (i.selected = false));
+      renderHistoryList();
+    });
+  }
+
+  if (reprintSelectedBtn) {
+    reprintSelectedBtn.addEventListener("click", async () => {
+      const selected = historyItems.filter((i) => i.selected);
       if (selected.length === 0) {
-        showBanner("Please select at least 1 ready PDF label to print & crop.", "error");
+        showBanner("Please select at least 1 history batch to re-print.", "info");
+        return;
+      }
+      const ids = selected.map((i) => i.id || i.job_id);
+      await VaultStorage.reprintVaultFiles(ids);
+      showBanner(`Restored ${selected.length} batch(es) to Pending Labels!`, "success");
+      switchTab("pending");
+      await loadExtensionData(false);
+    });
+  }
+
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener("click", async () => {
+      if (historyItems.length === 0) return;
+      if (confirm(`Clear all ${historyItems.length} processing history item(s)?`)) {
+        const ids = historyItems.map((i) => i.id || i.job_id);
+        await VaultStorage.moveVaultFilesToTrash(ids);
+        historyItems = [];
+        renderHistoryList();
+        showBanner("History cleared.", "info");
+      }
+    });
+  }
+
+  // Helper: Retrieve valid Base64 PDF binary for any pending item (Local, Cloud, History, or Chrome Download)
+  async function ensureItemBinary(item) {
+    if (!item) return null;
+
+    // 1. In-memory base64 check
+    if (item.base64 && typeof item.base64 === "string" && item.base64.length > 50) {
+      return item.base64;
+    }
+
+    // 2. In-memory buffer check
+    if (item.buffer && (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))) {
+      item.base64 = bufferToBase64(item.buffer);
+      return item.base64;
+    }
+
+    // 3. In-memory blob check
+    if (item.blob && typeof item.blob.arrayBuffer === "function") {
+      try {
+        const buf = await item.blob.arrayBuffer();
+        if (buf && buf.byteLength > 50) {
+          item.buffer = buf;
+          item.base64 = bufferToBase64(buf);
+          item.size = buf.byteLength;
+          return item.base64;
+        }
+      } catch {}
+    }
+
+    // 4. IndexedDB cache check by record ID
+    if (item.id) {
+      try {
+        const rec = await VaultStorage.getVaultRecordById(item.id);
+        if (rec) {
+          if (rec.base64 && typeof rec.base64 === "string" && rec.base64.length > 50) {
+            item.base64 = rec.base64;
+            item.size = rec.size || item.size;
+            return item.base64;
+          }
+          if (rec.buffer && (rec.buffer instanceof ArrayBuffer || ArrayBuffer.isView(rec.buffer))) {
+            item.buffer = rec.buffer;
+            item.base64 = bufferToBase64(rec.buffer);
+            item.size = rec.buffer.byteLength;
+            return item.base64;
+          }
+          if (rec.blob && typeof rec.blob.arrayBuffer === "function") {
+            const buf = await rec.blob.arrayBuffer();
+            if (buf && buf.byteLength > 50) {
+              item.buffer = buf;
+              item.base64 = bufferToBase64(buf);
+              item.size = buf.byteLength;
+              return item.base64;
+            }
+          }
+          if (!item.download_url && rec.download_url) item.download_url = rec.download_url;
+          if (!item.view_url && rec.view_url) item.view_url = rec.view_url;
+          if (!item.fileId && rec.fileId) item.fileId = rec.fileId;
+          if (!item.job_id && rec.job_id) item.job_id = rec.job_id;
+        }
+      } catch {}
+    }
+
+    // 5. Cloud Vault Server Download by fileId
+    if (item.fileId && currentAuthState && currentAuthState.token) {
+      try {
+        const resp = await fetch(`${activeApiBase}/cloud-vault/download/${item.fileId}`, {
+          headers: { Authorization: `Bearer ${currentAuthState.token}` },
+        });
+        if (resp && resp.ok) {
+          const buf = await resp.arrayBuffer();
+          if (buf && buf.byteLength > 50) {
+            item.buffer = buf;
+            item.base64 = bufferToBase64(buf);
+            item.size = buf.byteLength;
+            // Cache in IndexedDB for instant future access
+            await VaultStorage.addFilesToVault([
+              {
+                name: item.name,
+                buffer: buf,
+                base64: item.base64,
+                blob: new Blob([buf], { type: "application/pdf" }),
+                size: buf.byteLength,
+                type: "application/pdf",
+                platform: item.platform || "Shipping Label",
+              },
+            ]);
+            return item.base64;
+          }
+        }
+      } catch (err) {
+        console.warn("Cloud download failed for", item.name, err);
+      }
+    }
+
+    // 6. Direct URL download (reprinted history batches, download_url, view_url, job_id)
+    let url = item.download_url || item.view_url;
+    if (!url && item.job_id) {
+      url = `${activeApiBase}/jobs/${item.job_id}/download`;
+    }
+    if (url) {
+      try {
+        let fullUrl = url;
+        if (fullUrl.startsWith("/")) {
+          const origin = activeApiBase.replace(/\/api\/v1\/?$/, "");
+          fullUrl = `${origin}${fullUrl}`;
+        }
+        const headers = {};
+        if (currentAuthState && currentAuthState.token) {
+          headers["Authorization"] = `Bearer ${currentAuthState.token}`;
+        }
+        const resp = await fetch(fullUrl, { headers });
+        if (resp && resp.ok) {
+          const buf = await resp.arrayBuffer();
+          if (buf && buf.byteLength > 50) {
+            item.buffer = buf;
+            item.base64 = bufferToBase64(buf);
+            item.size = buf.byteLength;
+            // Cache in IndexedDB
+            await VaultStorage.addFilesToVault([
+              {
+                name: item.name,
+                buffer: buf,
+                base64: item.base64,
+                blob: new Blob([buf], { type: "application/pdf" }),
+                size: buf.byteLength,
+                type: "application/pdf",
+                platform: item.platform || "Shipping Label",
+              },
+            ]);
+            return item.base64;
+          }
+        }
+      } catch (err) {
+        console.warn("Direct URL download failed for", item.name, err);
+      }
+    }
+
+    // 7. Chrome Downloads fallback
+    if (item.downloadId && typeof chrome !== "undefined" && chrome.downloads) {
+      try {
+        const results = await chrome.downloads.search({ id: Number(item.downloadId) });
+        if (results && results[0] && results[0].url) {
+          const resp = await fetch(results[0].url);
+          if (resp && resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 50) {
+              item.buffer = buf;
+              item.base64 = bufferToBase64(buf);
+              item.size = buf.byteLength;
+              return item.base64;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
+  // --- Main Action: Print Selected (N) with Cloud Binary Retrieval ---
+  if (cropSelectedBtn) {
+    cropSelectedBtn.addEventListener("click", async () => {
+      const selected = pendingItems.filter((i) => i.selected);
+      if (selected.length === 0) {
+        showBanner("Please select at least 1 label to print & crop.", "error");
+        return;
+      }
+
+      // Gatekeeper Check: Ensure user is connected
+      if (!currentAuthState || !currentAuthState.isLoggedIn) {
+        await syncFromOpenTabs();
+      }
+
+      if (!currentAuthState || !currentAuthState.isLoggedIn) {
+        showBanner(
+          "🔒 Login Required: PDF upload & auto-crop use karne ke liye pehle login karein (Free Account).",
+          "error"
+        );
+        chrome.tabs.create({ url: "https://labelcropper.prayxis.in/login" });
         return;
       }
 
       hideBanner();
       cropSelectedBtn.disabled = true;
-      cropBtnText.textContent = `Transferring ${selected.length} PDF(s) to LabelFlow...`;
+      if (cropBtnText) cropBtnText.textContent = `Preparing ${selected.length} PDF(s)...`;
 
-      chrome.runtime.sendMessage({ action: "SEND_TO_LABELFLOW" }, (response) => {
-        if (response && response.success) {
-          cropBtnText.textContent = `✓ Transferred! Cropping in LabelFlow...`;
-          setTimeout(() => {
-            window.close();
-          }, 700);
-        } else {
-          if (response && response.needsLogin) {
-            checkAuthStatus();
-          }
-          showBanner(response?.error || "Error transferring files to website.", "error");
-          updateCtaButton();
+      // 1. Download & Hydrate all selected binaries in parallel
+      const cloudFileIds = [];
+      const cloudFilenames = [];
+      const failedItems = [];
+      const filePayloads = [];
+
+      for (let i = 0; i < selected.length; i++) {
+        const item = selected[i];
+        if (item.isCloud && item.fileId) {
+          cloudFileIds.push(item.fileId);
+          cloudFilenames.push(item.name);
         }
-      });
+
+        if (cropBtnText) {
+          cropBtnText.textContent = `Loading PDF ${i + 1}/${selected.length}...`;
+        }
+
+        const base64 = await ensureItemBinary(item);
+        if (base64) {
+          filePayloads.push({
+            id: item.id || item.fileId || `payload_${Date.now()}_${i}`,
+            name: item.name || item.filename || "shipping_label.pdf",
+            size: item.size || Math.round((base64.length * 3) / 4),
+            type: "application/pdf",
+            platform: item.platform || "Shipping Label",
+            base64: base64,
+          });
+        } else {
+          failedItems.push(item.name || "Untitled PDF");
+        }
+      }
+
+      if (filePayloads.length === 0) {
+        cropSelectedBtn.disabled = false;
+        updateCtaButton();
+        showBanner(
+          `Could not load PDF data for: ${failedItems.join(", ")}. Please re-upload.`,
+          "error"
+        );
+        return;
+      }
+
+      if (cropBtnText) cropBtnText.textContent = `Transferring ${filePayloads.length} PDF(s) to LabelFlow...`;
+
+      // 2. Dispatch to LabelFlow website for 4x6 thermal cropping with direct payloads
+      chrome.runtime.sendMessage(
+        {
+          action: "SEND_TO_LABELFLOW",
+          filePayloads: filePayloads,
+          cloudFileIds: cloudFileIds,
+          cloudFilenames: cloudFilenames,
+        },
+        async (response) => {
+          if (response && response.success) {
+            if (cropBtnText) cropBtnText.textContent = `✓ Transferred! Cropping in LabelFlow...`;
+
+            // 3. Mark cloud queue items as printed on server (Global Acknowledgment!)
+            if (cloudFileIds.length > 0 && currentAuthState && currentAuthState.token) {
+              try {
+                fetch(`${activeApiBase}/cloud-vault/mark-printed`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${currentAuthState.token}`,
+                  },
+                  body: JSON.stringify({
+                    file_ids: cloudFileIds,
+                    filenames: cloudFilenames,
+                  }),
+                }).catch(() => {});
+              } catch {}
+            }
+
+            setTimeout(() => {
+              window.close();
+            }, 700);
+          } else {
+            cropSelectedBtn.disabled = false;
+            updateCtaButton();
+            showBanner(response?.error || "Error transferring files to website.", "error");
+          }
+        }
+      );
     });
   }
 
+  // Listen for realtime data updates / acknowledgments from background
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && (msg.action === "UPDATE_VAULT_BADGE" || msg.action === "VAULT_DATA_CHANGED")) {
+      loadExtensionData(false);
+    }
+  });
+
   // Initial load
-  checkAuthStatus();
-  triggerScan(true);
-  fetchVaultData(false);
+  loadExtensionData(true);
 });

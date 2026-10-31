@@ -59,12 +59,36 @@ function broadcastExtensionReady() {
       type: "LABELFLOW_EXTENSION_STATUS",
       installed: true,
       vaultActive: true,
-      version: "2.1.0",
+      version: "2.8.2",
       auth: auth,
     },
     "*"
   );
   syncAuthToExtension();
+}
+
+// Deduplication guard to avoid firing duplicate window postMessages for the same batch
+let lastDeliveredBatchHash = "";
+function deliverFilesToPage(files, sourceDesc) {
+  if (!files || files.length === 0) return;
+  const hash = files.map((f) => f.id || f.name).join("|");
+  if (hash === lastDeliveredBatchHash) {
+    return;
+  }
+  lastDeliveredBatchHash = hash;
+  setTimeout(() => {
+    if (lastDeliveredBatchHash === hash) lastDeliveredBatchHash = "";
+  }, 4000);
+
+  console.log(`[LabelFlow Extension] Delivering ${files.length} vault file(s) via ${sourceDesc}`);
+  window.postMessage(
+    {
+      source: "LABELFLOW_EXTENSION",
+      type: "LABELFLOW_VAULT_IMPORT",
+      files: files,
+    },
+    "*"
+  );
 }
 
 // Check for pending vault import files queued by the extension
@@ -78,18 +102,7 @@ function checkAndDeliverPendingVaultImport() {
         response.pendingImport.files &&
         response.pendingImport.files.length > 0
       ) {
-        console.log(
-          "[LabelFlow Extension] Delivering pending vault files to page:",
-          response.pendingImport.files.length
-        );
-        window.postMessage(
-          {
-            source: "LABELFLOW_EXTENSION",
-            type: "LABELFLOW_VAULT_IMPORT",
-            files: response.pendingImport.files,
-          },
-          "*"
-        );
+        deliverFilesToPage(response.pendingImport.files, "CHECK_PENDING_VAULT_IMPORT");
       }
     });
   } catch (err) {
@@ -104,19 +117,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Query 48-hour local history stored on the LabelFlow webpage
+  if (message && message.type === "GET_PAGE_HISTORY") {
+    try {
+      const raw = localStorage.getItem("labelflow_local_history_48h");
+      const items = raw ? JSON.parse(raw) : [];
+      sendResponse({ success: true, items: Array.isArray(items) ? items : [] });
+    } catch (e) {
+      sendResponse({ success: false, items: [] });
+    }
+    return true;
+  }
+
   if (message && message.type === "IMPORT_VAULT_FILES") {
-    console.log(
-      "[LabelFlow Extension] Received live IMPORT_VAULT_FILES from background:",
-      message.files?.length
-    );
-    window.postMessage(
-      {
-        source: "LABELFLOW_EXTENSION",
-        type: "LABELFLOW_VAULT_IMPORT",
-        files: message.files,
-      },
-      "*"
-    );
+    deliverFilesToPage(message.files, "IMPORT_VAULT_FILES");
     sendResponse({ received: true });
   }
 });
@@ -147,12 +161,30 @@ window.addEventListener("focus", () => {
   checkAndDeliverPendingVaultImport();
 });
 
-// Real-time synchronization when user logs in or out on the website
+// Real-time synchronization when user logs in/out or crops labels on website
 window.addEventListener("storage", (e) => {
   if (e.key === "labelflow_jwt_token" || e.key === "labelflow_user_profile") {
     syncAuthToExtension();
   }
+  if (e.key === "labelflow_local_history_48h") {
+    syncWebsiteHistoryToExtension();
+  }
 });
+
+function syncWebsiteHistoryToExtension() {
+  try {
+    const raw = localStorage.getItem("labelflow_local_history_48h");
+    if (raw) {
+      const items = JSON.parse(raw);
+      if (Array.isArray(items) && items.length > 0) {
+        chrome.runtime.sendMessage({
+          action: "SYNC_LOCAL_HISTORY",
+          items: items,
+        });
+      }
+    }
+  } catch (err) {}
+}
 
 // 4. Listen for messages from the LabelFlow webpage window
 window.addEventListener("message", (event) => {
@@ -163,29 +195,41 @@ window.addEventListener("message", (event) => {
   if (data.type === "LABELFLOW_PAGE_READY") {
     broadcastExtensionReady();
     checkAndDeliverPendingVaultImport();
+    syncWebsiteHistoryToExtension();
   }
 
-  // Webpage reports successful crop & processing -> move processed files to Printed in extension
+  // Webpage acknowledges receiving imported files from extension
+  if (data.type === "LABELFLOW_VAULT_IMPORT_RECEIVED") {
+    chrome.runtime.sendMessage({
+      action: "VAULT_IMPORT_ACKNOWLEDGED",
+      fileIds: data.fileIds,
+    });
+  }
+
+  // Webpage reports successful crop & processing -> move processed files to Printed / History in extension
   if (data.type === "LABELFLOW_PROCESSING_SUCCESS") {
-    if (data.fileIds && data.fileIds.length > 0) {
-      chrome.runtime.sendMessage({
-        action: "MARK_PROCESSED_TO_TRASH",
-        ids: data.fileIds,
-      });
-    }
+    chrome.runtime.sendMessage({
+      action: "RECORD_PROCESSED_JOB",
+      historyItem: data.historyItem,
+      filenames: data.filenames || [],
+      job_id: data.job_id,
+      fileIds: data.fileIds || [],
+    });
+    syncWebsiteHistoryToExtension();
   }
 });
 
-// Initial announcement on page load
+// Initial announcement on page load - immediate handoff
 broadcastExtensionReady();
 checkAndDeliverPendingVaultImport();
+syncWebsiteHistoryToExtension();
 
 setTimeout(() => {
   broadcastExtensionReady();
   checkAndDeliverPendingVaultImport();
-}, 400);
+}, 50);
 
 setTimeout(() => {
   broadcastExtensionReady();
   checkAndDeliverPendingVaultImport();
-}, 1000);
+}, 200);
