@@ -164,17 +164,38 @@ class SKUIntelligenceEngine:
         if not raw_text:
             return None, "no_text", 0.0, False, []
 
-        norm_label = normalize_text(raw_text)
+        # Quarantine customer delivery address, return address, and courier blocks
+        # so address names/streets never trigger SKU classification
+        raw_lines = raw_text.splitlines()
+        clean_lines = []
+        skip_block = False
+        for ln in raw_lines:
+            ln_low = ln.lower().strip()
+            if any(hdr in ln_low for hdr in ["ship to", "deliver to", "delivery address", "customer address", "buyer", "return to", "sold by", "blue dart"]):
+                skip_block = True
+                continue
+            if any(hdr in ln_low for hdr in ["product", "sku", "item", "description", "order no", "sub order"]):
+                skip_block = False
+            if not skip_block:
+                clean_lines.append(ln)
+
+        isolated_raw = "\n".join(clean_lines) if clean_lines else raw_text
+        norm_label = normalize_text(isolated_raw)
         label_words = set(norm_label.split())
-        label_subtokens = set(t.lower() for t in re.findall(r"[A-Za-z]+|\d+", raw_text))
+        label_subtokens = set(t.lower() for t in re.findall(r"[A-Za-z]+|\d+", isolated_raw))
         compact_label = re.sub(r"[\s_\-\.\/]+", "", norm_label)
 
         # -------------------------------------------------------------
         # Level 1: Longest Saved Phrase Match in Label Text
         # -------------------------------------------------------------
         # Evaluates longest and most specific phrases first across both canonical codes and keywords
-        # (e.g. 'rospack 80ml' is matched before 'rospack')
+        # Single-word generic colors (e.g. 'green', 'brown', 'blue') are restricted to candidate_sku only
+        GENERIC_COLORS = {"brown", "green", "black", "blue", "red", "pink", "white", "yellow", "grey", "gray", "orange", "gold", "silver"}
         for phrase, code, is_canonical, _ in self.all_phrases:
+            # Prevent short/color words from matching inside addresses or surrounding text
+            if phrase in GENERIC_COLORS or len(phrase) <= 4:
+                continue
+
             p_pattern = r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])"
             compact_phrase = phrase.replace(" ", "")
             if re.search(p_pattern, norm_label):

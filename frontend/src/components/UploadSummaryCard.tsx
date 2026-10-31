@@ -1013,44 +1013,24 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
   const getMainSkuColorStyle = (name: string, isExcluded: boolean = false) => {
     if (isExcluded) {
       return {
-        border: "border-rose-300 dark:border-rose-900/50 bg-rose-50/50 dark:bg-rose-950/20",
-        badge: "bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60",
-        dot: "bg-rose-500",
+        border: "border-slate-200 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/40 opacity-60",
+        badge: "bg-slate-100 dark:bg-slate-900 text-slate-400 border border-slate-200 dark:border-slate-800",
+        dot: "bg-slate-400",
       };
     }
     const upper = name.toUpperCase();
-    if (upper.includes("BROWN")) {
+    if (upper === "UNKNOWN" || upper === "UNKNOWN SKUS" || upper === "UNMATCHED") {
       return {
-        border: "border-amber-300 dark:border-amber-700/40 hover:border-amber-400 dark:hover:border-amber-600/70 bg-amber-50/60 dark:bg-slate-900/60",
-        badge: "bg-amber-100 dark:bg-amber-950/50 text-amber-900 dark:text-amber-300 border border-amber-300 dark:border-amber-700/50",
+        border: "border-amber-300/70 dark:border-amber-700/50 bg-amber-50/30 dark:bg-slate-900/60",
+        badge: "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40",
         dot: "bg-amber-500",
       };
     }
-    if (upper.includes("GREEN")) {
-      return {
-        border: "border-emerald-300 dark:border-emerald-700/40 hover:border-emerald-400 dark:hover:border-emerald-600/70 bg-emerald-50/60 dark:bg-slate-900/60",
-        badge: "bg-emerald-100 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700/50",
-        dot: "bg-emerald-500",
-      };
-    }
-    if (upper.includes("PINK")) {
-      return {
-        border: "border-pink-300 dark:border-pink-700/40 hover:border-pink-400 dark:hover:border-pink-600/70 bg-pink-50/60 dark:bg-slate-900/60",
-        badge: "bg-pink-100 dark:bg-pink-950/50 text-pink-900 dark:text-pink-300 border border-pink-300 dark:border-pink-700/50",
-        dot: "bg-pink-500",
-      };
-    }
-    if (upper.includes("BLUE")) {
-      return {
-        border: "border-sky-300 dark:border-sky-700/40 hover:border-sky-400 dark:hover:border-sky-600/70 bg-sky-50/60 dark:bg-slate-900/60",
-        badge: "bg-sky-100 dark:bg-sky-950/50 text-sky-900 dark:text-sky-300 border border-sky-300 dark:border-sky-700/50",
-        dot: "bg-sky-500",
-      };
-    }
+    // Clean, professional, neat SaaS style
     return {
-      border: "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/70 dark:bg-slate-900/60",
+      border: "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900/60",
       badge: "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700",
-      dot: "bg-indigo-500 dark:bg-indigo-400",
+      dot: "bg-slate-500 dark:bg-slate-400",
     };
   };
 
@@ -1070,14 +1050,14 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-white dark:bg-[#0A101D] border border-slate-200 dark:border-slate-800/90 rounded-2xl shadow-xl overflow-hidden transition-colors">
-      {/* 1. Header Bar: Title, Count & Linear-style Segmented Tabs */}
-      <div className="p-4 border-b border-slate-200 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-950/60 flex-shrink-0 space-y-3">
+      {/* 1. Header Bar: Title, Count, SKU/Variant View Toggle & 1-Line Platform/Courier Bar */}
+      <div className="p-3.5 border-b border-slate-200 dark:border-slate-800/80 bg-slate-50/90 dark:bg-slate-950/70 flex-shrink-0 space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+            <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-300" />
             <h3 className="text-sm font-bold text-slate-900 dark:text-white tracking-tight">Batch Summary</h3>
             {totalDetectedLabels > data.total_labels ? (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 font-mono font-bold border border-amber-500/30">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono font-bold border border-slate-300 dark:border-slate-700">
                 {data.total_labels} / {totalDetectedLabels} Labels ({totalDetectedLabels - data.total_labels} Excluded)
               </span>
             ) : (
@@ -1086,72 +1066,100 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
               </span>
             )}
           </div>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">
-            Interactive Filter
-          </span>
+
+          {/* Clean 2-Way View Toggle: Grouped SKUs vs All Variants */}
+          <div className="flex items-center p-0.5 rounded-lg bg-slate-200 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 text-[11px] font-semibold">
+            <button
+              type="button"
+              onClick={() => setActiveTab("main_sku")}
+              className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
+                activeTab === "main_sku"
+                  ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-300 dark:border-slate-700"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
+            >
+              SKU ({availableMainSkus.length + (unknownGroup && (unknownGroup.sub_skus || []).length > 0 ? 1 : 0)})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("all_skus")}
+              className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
+                activeTab === "all_skus"
+                  ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-300 dark:border-slate-700"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
+            >
+              Variants ({sortedSubSkus.length})
+            </button>
+          </div>
         </div>
 
-        {/* 4 Modern Segmented Tabs */}
-        <div className="grid grid-cols-4 p-1 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/90 text-xs font-semibold gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab("main_sku")}
-            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-              activeTab === "main_sku"
-                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
-          >
-            <span>SKU</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "main_sku" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
-              {availableMainSkus.length + (unknownGroup && (unknownGroup.sub_skus || []).length > 0 ? 1 : 0)}
+        {/* Unified 1-Line Platform & Delivery Partner Overview (Neat, Clean, Professional SaaS Style) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 text-xs">
+          {/* Platforms row */}
+          <div className="flex items-center flex-wrap gap-1.5 min-w-0">
+            <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
+              Platform:
             </span>
-          </button>
+            {data.marketplace_breakdown && data.marketplace_breakdown.length > 0 ? (
+              data.marketplace_breakdown.map((m) => {
+                const isExcluded = excludedMarketplaces.has(m.marketplace.toUpperCase());
+                return (
+                  <button
+                    key={m.marketplace}
+                    type="button"
+                    onClick={() => toggleExcludeMarketplace(m.marketplace)}
+                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+                      isExcluded
+                        ? "bg-slate-100 dark:bg-slate-800/40 text-slate-400 border-dashed border-slate-300 dark:border-slate-700 line-through opacity-60"
+                        : "bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-slate-400"
+                    }`}
+                    title={isExcluded ? `Click to include ${m.marketplace}` : `Click to exclude ${m.marketplace}`}
+                  >
+                    <span>{m.marketplace}</span>
+                    <strong className="font-bold text-slate-900 dark:text-white">{m.label_count}</strong>
+                  </button>
+                );
+              })
+            ) : (
+              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
+                <span>Meesho</span>
+                <strong className="font-bold text-slate-900 dark:text-white">{data.total_labels}</strong>
+              </span>
+            )}
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab("all_skus")}
-            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-              activeTab === "all_skus"
-                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
-          >
-            <span>Variants</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "all_skus" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
-              {sortedSubSkus.length}
-            </span>
-          </button>
+          <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">•</span>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab("courier")}
-            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-              activeTab === "courier"
-                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
-          >
-            <span>Courier</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "courier" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
-              {data.courier_breakdown.length}
+          {/* Couriers row */}
+          <div className="flex items-center flex-wrap gap-1.5 min-w-0">
+            <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
+              Courier:
             </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("platforms")}
-            className={`py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-              activeTab === "platforms"
-                ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-bold border border-slate-200 dark:border-slate-700/80"
-                : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
-            }`}
-          >
-            <span>Platform</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${activeTab === "platforms" ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-bold" : "bg-slate-200 dark:bg-slate-900 text-slate-500"}`}>
-              {(data.marketplace_breakdown && data.marketplace_breakdown.length) || 1}
-            </span>
-          </button>
+            {data.courier_breakdown && data.courier_breakdown.length > 0 ? (
+              data.courier_breakdown.map((c) => {
+                const isExcluded = excludedCouriers.has(c.courier.toUpperCase());
+                return (
+                  <button
+                    key={c.courier}
+                    type="button"
+                    onClick={() => toggleExcludeCourier(c.courier)}
+                    className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+                      isExcluded
+                        ? "bg-slate-100 dark:bg-slate-800/40 text-slate-400 border-dashed border-slate-300 dark:border-slate-700 line-through opacity-60"
+                        : "bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-slate-400"
+                    }`}
+                    title={isExcluded ? `Click to include ${c.courier}` : `Click to exclude ${c.courier}`}
+                  >
+                    <span>{formatCourierName(c.courier)}</span>
+                    <strong className="font-bold text-slate-900 dark:text-white">{c.label_count}</strong>
+                  </button>
+                );
+              })
+            ) : (
+              <span className="text-slate-400 text-[11px] italic">None</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1278,7 +1286,7 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
                                 type="button"
                                 onClick={() => handleSaveSkuToCatalog(group.main_sku, group.sub_skus)}
                                 disabled={savingCatalogSku === group.main_sku.trim().toUpperCase()}
-                                className="text-[10px] font-bold text-cyan-600 dark:text-cyan-neon hover:underline cursor-pointer"
+                                className="text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white underline cursor-pointer"
                                 title="Click to save this SKU to your permanent Personal SKU Database"
                               >
                                 {savingCatalogSku === group.main_sku.trim().toUpperCase() ? "Saving..." : "＋ Save to Catalog"}
@@ -1305,7 +1313,7 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
                               type="button"
                               onClick={() => handleStartEditSku(group.main_sku, group.sub_skus)}
                               disabled={isReSorting || isConfirmingSku}
-                              className="p-1 rounded text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-neon hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
+                              className="p-1 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors"
                               title="Map multiple SKU values / rename"
                             >
                               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1338,10 +1346,10 @@ export const UploadSummaryCard: React.FC<UploadSummaryCardProps> = ({
 
                       {/* Inline SKU Editor */}
                       {editingMainSku === group.main_sku && (
-                        <div className="mt-2.5 p-3.5 rounded-xl bg-white dark:bg-slate-950 border border-cyan-400/50 dark:border-cyan-neon/40 shadow-xl space-y-3 animate-in fade-in">
+                        <div className="mt-2.5 p-3.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 shadow-xl space-y-3 animate-in fade-in">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-1.5">
-                              <span className="text-[10px] font-bold text-cyan-600 dark:text-cyan-neon uppercase tracking-wider block">
+                              <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">
                                 Map Multiple Values / Rename SKU
                               </span>
                               {isLoadingSkuKeywords ? (

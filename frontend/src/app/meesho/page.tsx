@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import CropLabelsPage from "../crop-labels/page";
+import CropLabelsPage from "@/components/CropLabelsPage";
 
 export const metadata: Metadata = {
   title: "Meesho Label Cropper Online — 1-Click 4×6 Thermal Label Crop & Sorter (Free)",

@@ -80,6 +80,23 @@ def get_main_sku_group(
         sku_clean_subtokens = set(t.upper() for t in re.findall(r"[A-Za-z]+|\d+", sku_clean))
         sku_clean_compact = re.sub(r"[\s_\-\.\/]+", "", sku_clean_upper)
 
+        product_text_clean = ""
+        if full_text:
+            # Quarantine customer delivery address, return address, and courier headers so address text never leaks into SKUs
+            lines = full_text.splitlines()
+            kept_lines = []
+            skip = False
+            for ln in lines:
+                ln_lower = ln.lower().strip()
+                if any(hdr in ln_lower for hdr in ["ship to", "deliver to", "delivery address", "customer address", "shipping address", "return to", "sold by"]):
+                    skip = True
+                    continue
+                if any(hdr in ln_lower for hdr in ["product", "sku", "item", "description", "order no", "sub order"]):
+                    skip = False
+                if not skip:
+                    kept_lines.append(ln)
+            product_text_clean = " ".join(kept_lines).upper()
+
         for phrase_str, code_upper in all_user_phrases:
             pattern = _compile_boundary_pattern(phrase_str)
             compact_phrase = phrase_str.replace(" ", "")
@@ -89,8 +106,12 @@ def get_main_sku_group(
                 return code_upper
             if len(compact_phrase) >= 4 and compact_phrase in sku_clean_compact:
                 return code_upper
-            if full_text and (pattern.search(full_text.upper()) or (len(compact_phrase) >= 4 and compact_phrase in full_text.upper())):
-                return code_upper
+
+            # Never match standalone generic color words (e.g. GREEN, BROWN, BLUE) in full label text or address!
+            is_generic_color = phrase_str in COLOR_KEYWORDS or len(phrase_str) <= 4
+            if not is_generic_color and product_text_clean:
+                if pattern.search(product_text_clean) or (len(compact_phrase) >= 5 and compact_phrase in product_text_clean.replace(" ", "")):
+                    return code_upper
 
     # If Smart SKU Detection is NOT turned on:
     # STRICT USER CONTROL: System NEVER invents or alters SKUs on its own!
@@ -100,6 +121,7 @@ def get_main_sku_group(
 
     # 3. Third Priority (ONLY when smart_sku_detection is TRUE):
     # Sort letter & number wise and identify distinct section keywords (e.g. GREEN, BLUE, BROWN, etc.)
+    # Strictly inspect candidate SKU string, never whole page text
     sku_upper = sku_clean.upper()
     for sec_kw in COLOR_KEYWORDS:
         pattern = COLOR_PATTERNS.get(sec_kw) or _compile_boundary_pattern(sec_kw)
@@ -142,7 +164,7 @@ RE_TABLE_MATCH = re.compile(
     re.I,
 )
 RE_KNOWN_PATTERN = re.compile(
-    r"\b((?:Po\d+Green|Po10Green|rspk\d+brown|rspk10brown|Green|Brown)[A-Za-z0-9_\-]*)\b",
+    r"\b((?:Po\d+Green|Po10Green|rspk\d+brown|rspk10brown)[A-Za-z0-9_\-]*)\b",
     re.I,
 )
 RE_MEESHO_SUBORDER = re.compile(r"\b(\d{16,22}_\d+)\b")
@@ -420,20 +442,23 @@ class PicklistGeneratorService:
                 )
                 continue
 
-            # Identify primary main SKU category for this label:
-            # If already matched or user-confirmed via description, use it directly; otherwise resolve prioritizing saved SKUs
-            matched_desc = getattr(skus[0], "description", None)
-            if matched_desc and str(matched_desc).strip() and str(matched_desc).strip().upper() not in ("UNMATCHED", "UNKNOWN", "UNKNOWN SKUS", "OTHER"):
-                primary_main_sku = str(matched_desc).strip().upper()
+            # Identify primary main SKU category for this label (O(1) memory cached)
+            sku_str = skus[0].sku
+            if sku_str in sku_to_main:
+                primary_main_sku = sku_to_main[sku_str]
             else:
-                primary_main_sku = get_main_sku_group(
-                    skus[0].sku,
-                    sku_engine=sku_engine,
-                    user_skus=user_skus,
-                    full_text=lbl_raw_text,
-                    smart_sku_detection=smart_sku_detection,
-                )
-            sku_to_main[skus[0].sku] = primary_main_sku
+                matched_desc = getattr(skus[0], "description", None)
+                if matched_desc and str(matched_desc).strip() and str(matched_desc).strip().upper() not in ("UNMATCHED", "UNKNOWN", "UNKNOWN SKUS", "OTHER"):
+                    primary_main_sku = str(matched_desc).strip().upper()
+                else:
+                    primary_main_sku = get_main_sku_group(
+                        sku_str,
+                        sku_engine=sku_engine,
+                        user_skus=user_skus,
+                        full_text=lbl_raw_text,
+                        smart_sku_detection=smart_sku_detection,
+                    )
+                sku_to_main[sku_str] = primary_main_sku
 
             if primary_main_sku not in main_groups:
                 main_groups[primary_main_sku] = {

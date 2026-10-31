@@ -24,6 +24,20 @@ async def lifespan(app: FastAPI):
         from app.api.v1.endpoints.cloud_vault import cleanup_expired_cloud_files
         asyncio.create_task(master_sheet_service.heal_all_missing_waybills())
         asyncio.create_task(master_sheet_service.heal_all_wrong_order_ids())
+        # Enforce 30-day active retention & 60-day trash auto-purge
+        asyncio.create_task(master_sheet_service.enforce_retention_policy())
+
+        async def periodic_retention_worker():
+            while True:
+                try:
+                    await asyncio.sleep(6 * 3600)  # runs every 6 hours
+                    await master_sheet_service.enforce_retention_policy()
+                except asyncio.CancelledError:
+                    break
+                except Exception as ex:
+                    logger.warning("Periodic retention error: %s", str(ex))
+
+        asyncio.create_task(periodic_retention_worker())
         # Periodic 48-hour cloud vault disk cleanup
         cleanup_expired_cloud_files()
     except Exception as e:

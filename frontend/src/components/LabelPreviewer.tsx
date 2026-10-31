@@ -16,6 +16,34 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showInsightsDrawer, setShowInsightsDrawer] = useState<boolean>(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [fitZoom, setFitZoom] = useState<number>(70);
+
+  // Dynamic Auto-Fit calculation: ensures 4x6 thermal labels fit container width with 0 horizontal scroll
+  useEffect(() => {
+    const updateZoom = () => {
+      if (!containerRef.current) return;
+      const containerWidth = containerRef.current.clientWidth;
+      const labelWidthPt = result.pages?.[0]?.dimensions_pt?.[0] || 578;
+      const labelWidthPx = labelWidthPt * (96 / 72);
+      // Subtract 32px for vertical scrollbar and safe lateral margins
+      const availableWidth = Math.max(280, containerWidth - 32);
+      const calculated = Math.floor((availableWidth / labelWidthPx) * 100);
+      const maxZoom = isFullscreen ? 140 : 100;
+      const safeZoom = Math.min(maxZoom, Math.max(55, calculated));
+      setFitZoom(safeZoom);
+    };
+
+    updateZoom();
+
+    if (typeof ResizeObserver !== "undefined" && containerRef.current) {
+      const observer = new ResizeObserver(() => {
+        updateZoom();
+      });
+      observer.observe(containerRef.current);
+      return () => observer.disconnect();
+    }
+  }, [isFullscreen]);
 
   const totalPages = result.total_labels_generated || 1;
   const viewPdfUrl = getViewPdfUrl(result.job_id);
@@ -101,49 +129,15 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
     >
       {/* Top Header Bar */}
       <div className="flex items-center justify-between px-3.5 sm:px-5 py-2.5 bg-slate-50/95 dark:bg-[#0D1526]/90 border-b border-slate-200 dark:border-slate-800/80 backdrop-blur-sm flex-shrink-0">
-        {/* Left: Platform badge & summary */}
-        <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
-          <span className="px-2 py-0.5 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-700 dark:text-violet-300 text-[10px] sm:text-[11px] font-bold uppercase tracking-wider shrink-0">
-            {(result.marketplace || "Meesho").toUpperCase()}
-          </span>
-
-          <div className="flex items-center space-x-2 truncate">
-            <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white tracking-tight truncate">
-              Document Preview
-            </h2>
-            <span className="text-slate-400 dark:text-slate-600 hidden sm:inline">•</span>
-            <span className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 font-medium shrink-0">
-              <span className="text-violet-600 dark:text-violet-400 font-bold">{totalPages}</span>{" "}
-              {totalPages === 1 ? "Label" : "Labels"}
-            </span>
-
-            {result.total_invoices_removed > 0 && (
-              <span className="hidden xl:inline-flex items-center text-[10px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 px-2 py-0.5 rounded-full shrink-0">
-                ✓ {result.total_invoices_removed} invoice(s) stripped
-              </span>
-            )}
-          </div>
+        {/* Left: Clean Title */}
+        <div className="flex items-center space-x-2.5 min-w-0">
+          <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white tracking-tight">
+            Document Preview
+          </h2>
         </div>
 
         {/* Right: Actions Toolbar */}
         <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
-          {/* Picklist CSV Button (if generated) */}
-          {picklistCsvUrl && (
-            <a
-              href={picklistCsvUrl}
-              download
-              className="hidden lg:flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-700/80 border border-slate-300 dark:border-slate-700/70 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white text-[11px] font-medium transition-colors"
-              title="Download consolidated SKU picklist CSV"
-            >
-              <svg className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="8" y1="13" x2="16" y2="13" />
-              </svg>
-              <span>Picklist</span>
-            </a>
-          )}
-
           {/* Download Button */}
           <button
             type="button"
@@ -230,12 +224,15 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
       </div>
 
       {/* Main Viewing Workspace */}
-      <div className="relative flex-1 w-full bg-slate-100 dark:bg-[#050811] overflow-hidden flex">
-        {/* The Native / Embedded PDF Viewer showing processed labels at 100% natural scale */}
+      <div
+        ref={containerRef}
+        className="relative flex-1 w-full bg-slate-100 dark:bg-[#050811] overflow-hidden flex"
+      >
+        {/* The Native / Embedded PDF Viewer with Chrome Default Toolbar (Fit to width, page counter, zoom, and fit button) */}
         <iframe
           ref={iframeRef}
           id="preview-pdf-frame"
-          src={`${viewPdfUrl}#toolbar=1&navpanes=0&zoom=100`}
+          src={`${viewPdfUrl}#toolbar=1&navpanes=0&view=FitH&zoom=${fitZoom}`}
           className="w-full h-full border-0 bg-slate-50 dark:bg-[#0e1320]"
           title={`${result.marketplace || "Shipping"} 4x6 Thermal Labels Preview`}
         />
@@ -326,7 +323,7 @@ export const LabelPreviewer: React.FC<LabelPreviewerProps> = ({
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
           <span>4×6 inch Thermal Format</span>
           <span className="text-slate-400 dark:text-slate-600">•</span>
-          <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">Standard 203/300 DPI</span>
+          <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">Auto-Fit ({fitZoom}%)</span>
         </div>
         <div className="hidden sm:flex items-center space-x-3 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
           <span>Ctrl+P to Print</span>

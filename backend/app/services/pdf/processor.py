@@ -160,26 +160,32 @@ class PDFBatchProcessor:
 
         # Keep open source fitz documents mapped by filename to render after sorting
         open_docs: Dict[str, fitz.Document] = {}
+        open_docs_bytes: Dict[str, bytes] = {}
+        sku_match_cache: Dict[str, Tuple[Optional[str], str, float, bool, List[str]]] = {}
+        sku_main_cache: Dict[str, str] = {}
 
         try:
-            for f_idx, file in enumerate(files):
+            # 1. High-Speed Concurrent File Upload Validation & Buffer Read
+            validation_results = await asyncio.gather(
+                *(pdf_validator_service.validate_uploaded_file(f) for f in files)
+            )
+
+            for f_idx, (file, (validation_item, raw_bytes)) in enumerate(zip(files, validation_results)):
                 filename = file.filename or f"upload_{f_idx+1}.pdf"
 
-                # 1. Structural validation
-                validation_item, raw_bytes = await pdf_validator_service.validate_uploaded_file(file)
                 if not validation_item.is_valid:
                     warnings.append(
                         f"File '{filename}' skipped: {', '.join(validation_item.errors)}"
                     )
                     continue
 
-                # 2. Persist to disk buffer to prevent PyMuPDF memory stream segfaults & reduce RAM
                 disk_file_path = job_dir / f"src_{f_idx}_{filename}"
                 try:
+                    # Persist raw bytes to disk buffer for persistent job downloads
                     with open(disk_file_path, "wb") as f_out:
                         f_out.write(raw_bytes)
-                    del raw_bytes  # Immediate free memory
-                    src_doc = fitz.open(str(disk_file_path))
+                    open_docs_bytes[filename] = raw_bytes
+                    src_doc = fitz.open(stream=raw_bytes, filetype="pdf")
                     open_docs[filename] = src_doc
                 except Exception as e:
                     warnings.append(f"Unable to read PDF file for '{filename}': {str(e)}")
@@ -215,12 +221,18 @@ class PDFBatchProcessor:
                     matched_kw: Optional[str] = None
 
                     if sku_engine:
-                        matched_sku, match_type, conf, is_ambiguous, candidates = (
-                            sku_engine.match_label_text(
-                                inspection.full_text,
-                                candidate_sku=raw_sku if raw_sku != "UNMATCHED" else None,
+                        cache_key = raw_sku if raw_sku != "UNMATCHED" else inspection.full_text[:300]
+                        if cache_key in sku_match_cache:
+                            matched_sku, match_type, conf, is_ambiguous, candidates = sku_match_cache[cache_key]
+                        else:
+                            matched_sku, match_type, conf, is_ambiguous, candidates = (
+                                sku_engine.match_label_text(
+                                    inspection.full_text,
+                                    candidate_sku=raw_sku if raw_sku != "UNMATCHED" else None,
+                                )
                             )
-                        )
+                            sku_match_cache[cache_key] = (matched_sku, match_type, conf, is_ambiguous, candidates)
+
                         if matched_sku:
                             intel_sku = ExtractedSKU(
                                 sku=raw_sku if raw_sku != "UNMATCHED" else matched_sku,
@@ -284,14 +296,7 @@ class PDFBatchProcessor:
                             is_label_extracted = True
                             is_invoice_removed = True
                             total_invoices_removed += 1
-                            if inspection.label_rect:
-                                crop_box = inspection.label_rect
-                            elif getattr(inspection, "marketplace", "").lower() == "flipkart":
-                                crop_box = pdf_inspector.detect_flipkart_label_rect(src_page, inspection.width, inspection.height)
-                            elif getattr(inspection, "marketplace", "").lower() == "snapdeal":
-                                crop_box = pdf_inspector.detect_snapdeal_label_rect(src_page, inspection.width, inspection.height)
-                            else:
-                                crop_box = fitz.Rect(0, 0, inspection.width, inspection.height * 0.52)
+                            crop_box = inspection.label_rect or fitz.Rect(0, 0, inspection.width, inspection.height * 0.52)
 
                             candidate_labels.append({
                                 "filename": filename,
@@ -411,7 +416,10 @@ class PDFBatchProcessor:
                             courier_confidence=confidence,
                             sku_items=sku_items,
                             marketplace=getattr(inspection, "marketplace", "Meesho") or "Meesho",
-                            dimensions_pt=[round(inspection.width, 1), round(inspection.height, 1)],
+                            dimensions_pt=[
+                                round(inspection.label_rect.width + 20.0, 1) if inspection.label_rect else round(inspection.width, 1),
+                                round(inspection.label_rect.height + 20.0, 1) if inspection.label_rect else round(inspection.height, 1),
+                            ],
                         )
                     )
 
@@ -448,37 +456,40 @@ class PDFBatchProcessor:
                             {"is_trashed": {"$ne": True}},
                         ]
                     }
-                    cursor = db.master_labels.find(
-                        dup_query,
-                        projection={
-                            "order_id": 1,
-                            "wbl_id": 1,
-                            "sku": 1,
-                            "courier_partner": 1,
-                            "appearances": 1,
-                            "last_processed_at": 1,
-                        },
-                    )
-                    async for m_doc in cursor:
-                        apps = [a for a in m_doc.get("appearances", []) if not a.get("is_trashed")]
-                        if not apps:
-                            continue
-                        prev_app = apps[-1]
-                        ord_id = (m_doc.get("order_id") or "").strip().upper()
-                        w_id = (m_doc.get("wbl_id") or "").strip().upper()
-                        info = {
-                            "order_id": m_doc.get("order_id"),
-                            "wbl_id": m_doc.get("wbl_id"),
-                            "sku": m_doc.get("sku") or "UNMATCHED",
-                            "courier": m_doc.get("courier_partner") or "Unassigned",
-                            "previous_job_id": prev_app.get("job_id"),
-                            "previous_filename": prev_app.get("pdf_filename") or prev_app.get("input_filename"),
-                            "previous_processed_at": m_doc.get("last_processed_at") or prev_app.get("created_at"),
-                        }
-                        if ord_id:
-                            previous_orders_map[ord_id] = info
-                        if w_id:
-                            previous_orders_map[w_id] = info
+                    async def _fetch_master_duplicates():
+                        cursor = db.master_labels.find(
+                            dup_query,
+                            projection={
+                                "order_id": 1,
+                                "wbl_id": 1,
+                                "sku": 1,
+                                "courier_partner": 1,
+                                "appearances": 1,
+                                "last_processed_at": 1,
+                            },
+                        ).limit(600)
+                        async for m_doc in cursor:
+                            apps = [a for a in m_doc.get("appearances", []) if not a.get("is_trashed")]
+                            if not apps:
+                                continue
+                            prev_app = apps[-1]
+                            ord_id = (m_doc.get("order_id") or "").strip().upper()
+                            w_id = (m_doc.get("wbl_id") or "").strip().upper()
+                            info = {
+                                "order_id": m_doc.get("order_id"),
+                                "wbl_id": m_doc.get("wbl_id"),
+                                "sku": m_doc.get("sku") or "UNMATCHED",
+                                "courier": m_doc.get("courier_partner") or "Unassigned",
+                                "previous_job_id": prev_app.get("job_id"),
+                                "previous_filename": prev_app.get("pdf_filename") or prev_app.get("input_filename"),
+                                "previous_processed_at": m_doc.get("last_processed_at") or prev_app.get("created_at"),
+                            }
+                            if ord_id:
+                                previous_orders_map[ord_id] = info
+                            if w_id:
+                                previous_orders_map[w_id] = info
+
+                    await asyncio.wait_for(_fetch_master_duplicates(), timeout=1.2)
                 except Exception as e_ms:
                     logger.warning("Error fetching master_labels for duplicate check: %s", str(e_ms))
             elif recent_job_ids and (batch_order_ids or batch_wbl_ids):
@@ -567,13 +578,18 @@ class PDFBatchProcessor:
                     if parent_desc and str(parent_desc).strip() and str(parent_desc).strip().upper() not in ("UNMATCHED", "UNKNOWN", "UNKNOWN SKUS", "OTHER"):
                         main_sku = str(parent_desc).strip().upper()
                     else:
-                        main_sku = get_main_sku_group(
-                            primary_sku,
-                            sku_engine=sku_engine,
-                            user_skus=user_skus,
-                            full_text=lbl.get("raw_text", ""),
-                            smart_sku_detection=getattr(config, "smart_sku_detection", False),
-                        ).strip().upper()
+                        clean_main_key = primary_sku.strip().upper()
+                        if clean_main_key in sku_main_cache:
+                            main_sku = sku_main_cache[clean_main_key]
+                        else:
+                            main_sku = get_main_sku_group(
+                                primary_sku,
+                                sku_engine=sku_engine,
+                                user_skus=user_skus,
+                                full_text=lbl.get("raw_text", ""),
+                                smart_sku_detection=getattr(config, "smart_sku_detection", False),
+                            ).strip().upper()
+                            sku_main_cache[clean_main_key] = main_sku
                     lbl["main_sku"] = main_sku
                     if main_sku in excluded_main_set:
                         continue
@@ -751,7 +767,7 @@ class PDFBatchProcessor:
                     q: Dict[str, Any] = {"marketplace": clean_mp}
                     if user_id:
                         q["user_id"] = user_id
-                    count = await asyncio.wait_for(db.processing_jobs.count_documents(q), timeout=0.8)
+                    count = await asyncio.wait_for(db.processing_jobs.count_documents(q), timeout=0.3)
                     seq_num = count + 1
                 except Exception:
                     seq_num = 1
@@ -800,12 +816,76 @@ class PDFBatchProcessor:
                 downloads=downloads,
             )
 
-            # 10. Save JSON Audit Report to Disk
-            report_path = job_dir / "processing_report.json"
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(job_response.model_dump_json(indent=2))
+            # 10. Async Background Disk & DB Persistence (Never blocks HTTP response)
+            orig_filenames = [f.filename for f in files if f.filename]
+            asyncio.create_task(
+                self._persist_job_artifacts_and_master_background(
+                    job_dir=job_dir,
+                    job_response=job_response,
+                    candidate_labels=candidate_labels,
+                    user_id=user_id,
+                    job_id=job_id,
+                    clean_mp=clean_mp,
+                    formatted_pdf_name=formatted_pdf_name,
+                    job_status=job_response.status,
+                    created_at=created_at,
+                    total_files=len(files),
+                    total_labels_generated=total_labels_generated,
+                    total_invoices_removed=total_invoices_removed,
+                    courier_breakdown=courier_breakdown,
+                    main_skus=main_skus,
+                    downloads=downloads,
+                    ambiguous_labels=ambiguous_labels,
+                    sorted_labels=sorted_labels,
+                    original_filenames=orig_filenames,
+                )
+            )
 
-            # 11. Save candidate labels metadata for ambiguity recompilation
+            logger.info(
+                "Job %s completed in fast pipeline: %d labels, %d invoices removed, %d flagged",
+                job_id,
+                total_labels_generated,
+                total_invoices_removed,
+                total_pages_flagged,
+            )
+
+            return job_response
+
+        finally:
+            # Safely close all PyMuPDF documents to prevent memory leaks
+            for doc in open_docs.values():
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+
+    async def _persist_job_artifacts_and_master_background(
+        self,
+        job_dir: Path,
+        job_response: ProcessingJobResponse,
+        candidate_labels: List[Dict[str, Any]],
+        user_id: Optional[str],
+        job_id: str,
+        clean_mp: str,
+        formatted_pdf_name: str,
+        job_status: str,
+        created_at: datetime,
+        total_files: int,
+        total_labels_generated: int,
+        total_invoices_removed: int,
+        courier_breakdown: List[Any],
+        main_skus: List[Any],
+        downloads: Any,
+        ambiguous_labels: List[Any],
+        sorted_labels: List[Dict[str, Any]],
+        original_filenames: Optional[List[str]] = None,
+    ) -> None:
+        """Background asynchronous persistence for JSON reports, MongoDB job history, and Master Sheet."""
+        # 1. Non-blocking disk reports
+        try:
+            report_path = job_dir / "processing_report.json"
+            report_path.write_text(job_response.model_dump_json(), encoding="utf-8")
+
             candidate_labels_serializable = []
             for c in candidate_labels:
                 crop = c["crop_box"]
@@ -827,70 +907,11 @@ class PDFBatchProcessor:
                 })
             with open(job_dir / "candidate_labels.json", "w", encoding="utf-8") as f:
                 json.dump(candidate_labels_serializable, f)
-
-            # 12. Persist processing job & Master Sheet in Background Task (Never blocks HTTP response)
-            orig_filenames = [f.filename for f in files if f.filename]
-            if user_id:
-                asyncio.create_task(
-                    self._persist_job_and_master_sheet_background(
-                        user_id=user_id,
-                        job_id=job_id,
-                        clean_mp=clean_mp,
-                        formatted_pdf_name=formatted_pdf_name,
-                        job_status=job_response.status,
-                        created_at=created_at,
-                        total_files=len(files),
-                        total_labels_generated=total_labels_generated,
-                        total_invoices_removed=total_invoices_removed,
-                        courier_breakdown=courier_breakdown,
-                        main_skus=main_skus,
-                        downloads=downloads,
-                        ambiguous_labels=ambiguous_labels,
-                        sorted_labels=sorted_labels,
-                        original_filenames=orig_filenames,
-                    )
-                )
-
-            logger.info(
-                "Job %s completed in fast pipeline: %d labels, %d invoices removed, %d flagged",
-                job_id,
-                total_labels_generated,
-                total_invoices_removed,
-                total_pages_flagged,
-            )
-
-            return job_response
-
-        finally:
-            # Safely close all PyMuPDF documents to prevent memory leaks
-            for doc in open_docs.values():
-                try:
-                    doc.close()
-                except Exception:
-                    pass
-
-    async def _persist_job_and_master_sheet_background(
-        self,
-        user_id: str,
-        job_id: str,
-        clean_mp: str,
-        formatted_pdf_name: str,
-        job_status: str,
-        created_at: datetime,
-        total_files: int,
-        total_labels_generated: int,
-        total_invoices_removed: int,
-        courier_breakdown: List[Any],
-        main_skus: List[Any],
-        downloads: Any,
-        ambiguous_labels: List[Any],
-        sorted_labels: List[Dict[str, Any]],
-        original_filenames: Optional[List[str]] = None,
-    ) -> None:
-        """Background asynchronous persistence for MongoDB job history and Master Sheet recording."""
+        except Exception as e_rep:
+            logger.warning("Background report writing error for job %s: %s", job_id, str(e_rep))
         try:
             db = get_db()
-            if db is not None:
+            if db is not None and user_id:
                 await db.processing_jobs.insert_one({
                     "job_id": job_id,
                     "user_id": user_id,

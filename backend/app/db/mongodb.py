@@ -214,6 +214,42 @@ async def _create_indexes(db: Any) -> None:
             name="idx_cloud_queue_ttl_expires_at",
         )
 
+        # Master Sheet Labels Collection: compound indexes for superfast <30ms queries
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("is_trashed", pymongo.ASCENDING), ("last_processed_at", pymongo.DESCENDING)],
+            name="idx_master_labels_user_trashed_processed",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("order_id", pymongo.ASCENDING)],
+            name="idx_master_labels_user_order_id",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("wbl_id", pymongo.ASCENDING)],
+            name="idx_master_labels_user_wbl_id",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("marketplace", pymongo.ASCENDING), ("is_trashed", pymongo.ASCENDING), ("last_processed_at", pymongo.DESCENDING)],
+            name="idx_master_labels_user_mp_trashed_processed",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("courier_partner", pymongo.ASCENDING), ("is_trashed", pymongo.ASCENDING), ("last_processed_at", pymongo.DESCENDING)],
+            name="idx_master_labels_user_courier_trashed_processed",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("sku", pymongo.ASCENDING)],
+            name="idx_master_labels_user_sku",
+        )
+        await db.master_labels.create_index(
+            [("user_id", pymongo.ASCENDING), ("wbl_id", pymongo.ASCENDING)],
+            name="idx_master_labels_user_wbl",
+        )
+        # Automatic MongoDB 60-day TTL purge for trashed labels
+        await db.master_labels.create_index(
+            [("trashed_at", pymongo.ASCENDING)],
+            expireAfterSeconds=60 * 86400,
+            name="idx_master_labels_ttl_trashed_60d",
+        )
+
         logger.info("MongoDB indexes verified/created successfully.")
     except Exception as e:
         logger.warning("Notice while creating MongoDB indexes: %s", str(e))

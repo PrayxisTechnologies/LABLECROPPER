@@ -520,6 +520,21 @@ async def resolve_job_ambiguity(
                     "updated_at": now,
                 })
 
+    # Load active user SKUs early so they are available for both filtering and groupings
+    user_skus_list: List[Dict[str, Any]] = []
+    if user_id:
+        try:
+            from app.api.v1.endpoints.skus import _get_user_clauses
+            user_email = current_user.get("email") if current_user else None
+            user_clauses = _get_user_clauses(user_id, user_email)
+            async for u_doc in db.user_skus.find({
+                "$or": user_clauses,
+                "is_active": {"$ne": False},
+            }):
+                user_skus_list.append(u_doc)
+        except Exception as u_err:
+            logger.warning("Could not pre-load user_skus for job %s: %s", job_id, str(u_err))
+
     # 2. Load stored candidate labels and previous report
     with open(labels_file, "r", encoding="utf-8") as f:
         stored_candidates = json.load(f)
@@ -718,10 +733,13 @@ async def resolve_job_ambiguity(
             fname = item["filename"]
             if fname not in open_docs:
                 src_path = None
-                # Search for buffered source file
-                for f in job_dir.glob(f"src_*_{fname}"):
-                    src_path = f
-                    break
+                # Search for buffered source file safely
+                clean_target = Path(fname).name.lower()
+                for f in job_dir.glob("src_*"):
+                    f_name_lower = f.name.lower()
+                    if f_name_lower.endswith(clean_target) or clean_target in f_name_lower:
+                        src_path = f
+                        break
                 if src_path and src_path.exists():
                     open_docs[fname] = fitz.open(str(src_path))
 
@@ -1120,4 +1138,34 @@ async def delete_job(
     _robust_remove_job_dir(job_id)
 
     logger.info("User %s permanently deleted job record %s", user_id, job_id)
+    return {"message": f"Batch {job_id} deleted permanently.", "job_id": job_id}
+
+
+@router.get(
+    "/jobs/{job_id}/download",
+    summary="Download thermal PDF for job (convenience alias)",
+)
+async def download_job_pdf_alias(job_id: str):
+    """Direct alias to download the 4x6 thermal PDF for a job."""
+    from fastapi.responses import FileResponse
+    job_dir = _find_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job '{job_id}' not found or has expired.",
+        )
+    file_path = job_dir / "labels_thermal_4x6.pdf"
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thermal PDF was not generated or has expired for this job.",
+        )
+    fn_file = job_dir / "formatted_name.txt"
+    pdf_name = fn_file.read_text(encoding="utf-8").strip() if fn_file.exists() else f"labels_{job_id}.pdf"
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=pdf_name,
+    )
+
     return {"message": f"Batch {job_id} permanently deleted successfully."}

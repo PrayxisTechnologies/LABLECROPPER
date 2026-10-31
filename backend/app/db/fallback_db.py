@@ -257,10 +257,40 @@ class InMemoryCollection:
                 return copy.deepcopy(doc)
         return None
 
-    def find(self, filter_query: Optional[dict] = None) -> AsyncCursor:
+    def find(self, filter_query: Optional[dict] = None, projection: Optional[dict] = None, *args, **kwargs) -> AsyncCursor:
         q = filter_query or {}
         matched = [d for d in self._docs if matches_query(d, q)]
+        if projection:
+            projected = []
+            for doc in matched:
+                p_doc = copy.deepcopy(doc)
+                for k, v in projection.items():
+                    if v == 0 and k in p_doc:
+                        del p_doc[k]
+                projected.append(p_doc)
+            return AsyncCursor(projected)
         return AsyncCursor(matched)
+
+    def aggregate(self, pipeline: list) -> AsyncCursor:
+        """Support basic aggregation pipeline ($match, $group)."""
+        current_docs = list(self._docs)
+        for stage in pipeline:
+            if "$match" in stage:
+                current_docs = [d for d in current_docs if matches_query(d, stage["$match"])]
+            elif "$group" in stage:
+                grp = stage["$group"]
+                group_key_field = grp.get("_id")
+                grouped: Dict[str, dict] = {}
+                for d in current_docs:
+                    key_val = None
+                    if isinstance(group_key_field, str) and group_key_field.startswith("$"):
+                        key_val = d.get(group_key_field.lstrip("$"))
+                    key_str = str(key_val or "")
+                    if key_str not in grouped:
+                        grouped[key_str] = {"_id": key_val, "count": 0}
+                    grouped[key_str]["count"] += 1
+                current_docs = list(grouped.values())
+        return AsyncCursor(current_docs)
 
     async def count_documents(self, filter_query: Optional[dict] = None) -> int:
         q = filter_query or {}

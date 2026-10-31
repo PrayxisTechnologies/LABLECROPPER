@@ -116,26 +116,54 @@ async def inspect_uploaded_labels(
         for pno in range(num_pages):
             page = doc[pno]
             p_rect = page.rect
-            is_meesho_a4 = abs(p_rect.width - 595.0) <= 25.0 and abs(p_rect.height - 842.0) <= 25.0
-            
-            # Fast clipped text extraction: Dynamically extract shipping label area up to TAX INVOICE.
-            # This completely skips parsing the dense lower tax invoice table, boosting scan speed 5x.
-            crop_limit_y = (
-                pdf_inspector.detect_tax_invoice_separator(page, p_rect.width, p_rect.height) + 10.0
-                if is_meesho_a4
-                else p_rect.height
-            )
-            clip_box = fitz.Rect(0, 0, p_rect.width, crop_limit_y)
-            page_text = page.get_text("text", clip=clip_box)
-            if not page_text.strip():
-                page_text = page.get_text("text")
+            full_raw_text = page.get_text("text")
+            top_header_clip = fitz.Rect(0, 0, p_rect.width, min(p_rect.height, 180.0))
+            top_header_text = page.get_text("text", clip=top_header_clip).strip()
 
-            # Check if this page has shipping indicators (skip standalone invoice pages)
-            header_sample = page_text[:1200]
-            if not RE_SHIPPING_INDICATORS.search(header_sample):
-                full_sample = page.get_text("text")[:1000]
-                if RE_TAX_INVOICE_HEADER.search(full_sample) or RE_INVOICE_TABLE_START.search(full_sample):
-                    continue
+            # Check Marketplace-specific layouts FIRST so Snapdeal/Flipkart are never chopped as Meesho
+            if pdf_inspector.is_snapdeal_label(top_header_text, full_raw_text):
+                mp_name = "Snapdeal"
+                sd_rect = pdf_inspector.detect_snapdeal_label_rect(page, p_rect.width, p_rect.height)
+                page_text = page.get_text("text", clip=sd_rect)
+                if not page_text.strip() or len(page_text.strip()) < 30:
+                    page_text = full_raw_text
+                header_sample = page_text[:1200]
+            elif pdf_inspector.is_flipkart_label(top_header_text, full_raw_text):
+                mp_name = "Flipkart"
+                fk_rect = pdf_inspector.detect_flipkart_label_rect(page, p_rect.width, p_rect.height)
+                page_text = page.get_text("text", clip=fk_rect)
+                if not page_text.strip() or len(page_text.strip()) < 30:
+                    page_text = full_raw_text
+                header_sample = page_text[:1200]
+            else:
+                is_meesho_a4 = abs(p_rect.width - 595.0) <= 25.0 and abs(p_rect.height - 842.0) <= 25.0
+                
+                # Fast clipped text extraction: Dynamically extract shipping label area up to TAX INVOICE.
+                # This completely skips parsing the dense lower tax invoice table, boosting scan speed 5x.
+                crop_limit_y = (
+                    pdf_inspector.detect_tax_invoice_separator(page, p_rect.width, p_rect.height) + 10.0
+                    if is_meesho_a4
+                    else p_rect.height
+                )
+                clip_box = fitz.Rect(0, 0, p_rect.width, crop_limit_y)
+                page_text = page.get_text("text", clip=clip_box)
+                if not page_text.strip():
+                    page_text = full_raw_text
+
+                # Check if this page has shipping indicators (skip standalone invoice pages)
+                header_sample = page_text[:1200]
+                if not RE_SHIPPING_INDICATORS.search(header_sample):
+                    full_sample = full_raw_text[:1000]
+                    if RE_TAX_INVOICE_HEADER.search(full_sample) or RE_INVOICE_TABLE_START.search(full_sample):
+                        continue
+
+                # Per-page marketplace platform detection
+                if "amazon" in full_raw_text.lower():
+                    mp_name = "Amazon"
+                elif "myntra" in full_raw_text.lower():
+                    mp_name = "Myntra"
+                else:
+                    mp_name = "Meesho"
 
             total_labels += 1
 
@@ -145,18 +173,6 @@ async def inspect_uploaded_labels(
                 header_text=header_sample,
             )
             courier_counts[courier] = courier_counts.get(courier, 0) + 1
-
-            # Per-page marketplace platform detection
-            if pdf_inspector.is_snapdeal_label(header_sample, page_text):
-                mp_name = "Snapdeal"
-            elif pdf_inspector.is_flipkart_label(header_sample, page_text):
-                mp_name = "Flipkart"
-            elif "amazon" in page_text.lower():
-                mp_name = "Amazon"
-            elif "myntra" in page_text.lower():
-                mp_name = "Myntra"
-            else:
-                mp_name = "Meesho"
             marketplace_counts[mp_name] = marketplace_counts.get(mp_name, 0) + 1
 
             # High-speed SKU extraction
@@ -344,12 +360,15 @@ async def process_labels(
             from app.api.v1.endpoints.skus import _get_user_clauses
             user_clauses = _get_user_clauses(user_id, current_user.get("email"))
             try:
-                user_skus, user_decisions = await asyncio.gather(
-                    db.user_skus.find({
-                        "$or": user_clauses,
-                        "is_active": {"$ne": False},
-                    }).to_list(length=1000),
-                    db.sku_decisions.find({"$or": user_clauses}).to_list(length=500),
+                user_skus, user_decisions = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.user_skus.find({
+                            "$or": user_clauses,
+                            "is_active": {"$ne": False},
+                        }).to_list(length=1000),
+                        db.sku_decisions.find({"$or": user_clauses}).to_list(length=500),
+                    ),
+                    timeout=1.0,
                 )
             except Exception:
                 user_skus, user_decisions = [], []

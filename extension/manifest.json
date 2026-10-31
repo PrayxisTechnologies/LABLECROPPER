@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LabelFlow — E-Commerce Shipping Label Auto-Detector",
-  "version": "2.8.2",
+  "version": "2.8.4",
   "description": "Auto-detects Meesho, Flipkart, Snapdeal, Amazon & Myntra shipping label PDF downloads and imports them into LabelFlow in 1 click.",
   "permissions": [
     "downloads",

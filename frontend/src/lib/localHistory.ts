@@ -285,6 +285,8 @@ export function formatHistoryTimestamp(timestamp: number): string {
   if (!timestamp) return "Recently";
 
   const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return "Recently";
+
   const now = new Date();
 
   const isToday =

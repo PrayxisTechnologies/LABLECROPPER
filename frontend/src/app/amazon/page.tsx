@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import CropLabelsPage from "../crop-labels/page";
+import CropLabelsPage from "@/components/CropLabelsPage";
 
 export const metadata: Metadata = {
   title: "Amazon Shipping Label Cropper (Easy Ship 4×6 Thermal)",

@@ -34,9 +34,12 @@ export const ExtensionDownloadModal: React.FC<ExtensionDownloadModalProps> = ({
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen || !mounted) return null;
+  if (!isOpen || !mounted || typeof document === "undefined" || !document.body) return null;
 
-  const downloadUrl = getExtensionDownloadUrl();
+  const downloadUrl =
+    typeof getExtensionDownloadUrl === "function"
+      ? getExtensionDownloadUrl()
+      : "/api/extension/download";
 
   const handleDownload = () => {
     setDownloading(true);

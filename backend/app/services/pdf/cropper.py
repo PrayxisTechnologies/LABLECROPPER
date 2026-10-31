@@ -11,7 +11,6 @@ import fitz  # PyMuPDF
 #
 # Unit: Points (72 points = 1 inch, 1 mm ≈ 2.83 pt)
 # Default: 10.0 pt (~3.5 mm) safe margin around the label.
-# Agar aapko padding kam/jyada karni ho, toh in values ko directly change kar sakte hain:
 DEFAULT_PADDING_LEFT = 10.0    # Left margin in points (~3.5 mm)
 DEFAULT_PADDING_TOP = 10.0     # Top margin in points (~3.5 mm)
 DEFAULT_PADDING_RIGHT = 10.0   # Right margin in points (~3.5 mm)

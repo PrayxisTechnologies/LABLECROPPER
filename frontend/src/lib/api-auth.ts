@@ -24,7 +24,7 @@ const USER_KEY = "labelflow_user_profile";
 
 export function getStoredToken(): string | null {
   if (typeof window !== "undefined") {
-    return localStorage.getItem(TOKEN_KEY);
+    return localStorage.getItem(TOKEN_KEY) || localStorage.getItem("labelflow_token");
   }
   return null;
 }

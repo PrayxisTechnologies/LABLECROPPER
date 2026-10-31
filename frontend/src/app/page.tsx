@@ -55,6 +55,9 @@ export default function HomePage() {
   const [backendVersion, setBackendVersion] = useState<string>("1.0.0");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [processingStage, setProcessingStage] = useState<string>("Ready");
+  const [activeProcessingFileName, setActiveProcessingFileName] = useState<string>("");
 
   // Auto-loaded from localStorage (Default: SKU + Delivery partner)
   const [processingConfig, setProcessingConfig] = useState<ProcessingConfig>(DEFAULT_CONFIG);
@@ -165,8 +168,30 @@ export default function HomePage() {
     setIsProcessing(true);
     setErrorMessage(null);
 
+    const displayName =
+      rawFiles.length === 1
+        ? rawFiles[0].name
+        : `${rawFiles.length} PDF files (${formatBytes(rawFiles.reduce((acc, f) => acc + f.size, 0))})`;
+    setActiveProcessingFileName(displayName);
+    setUploadProgress(20);
+    setProcessingStage("Connecting to cropper engine...");
+
     try {
-      const response = await processLabelsOnBackend(rawFiles, configToUse);
+      const response = await processLabelsOnBackend(
+        rawFiles,
+        configToUse,
+        undefined,
+        (pct, stage) => {
+          setUploadProgress(pct);
+          setProcessingStage(stage);
+        }
+      );
+
+      setUploadProgress(100);
+      setProcessingStage("✓ Complete! Opening preview...");
+      // Short delay for visual polish so user sees 100% completion
+      await new Promise((r) => setTimeout(r, 220));
+
       setProcessingResult(response);
 
       // Auto-save guest / local 48-hour processing history
@@ -219,6 +244,8 @@ export default function HomePage() {
       setErrorMessage(msg);
     } finally {
       setIsProcessing(false);
+      setUploadProgress(0);
+      setActiveProcessingFileName("");
     }
   };
 
@@ -262,6 +289,8 @@ export default function HomePage() {
     }
   };
 
+  const lastExtensionImportRef = useRef<{ hash: string; timestamp: number }>({ hash: "", timestamp: 0 });
+
   /**
    * Dedicated Chrome Extension 1-Click Vault Import Handler
    * Replaces any existing batch with incoming files directly without duplicate name filtering,
@@ -269,6 +298,16 @@ export default function HomePage() {
    */
   const handleExtensionImportFiles = async (incomingFiles: File[]) => {
     if (!incomingFiles || incomingFiles.length === 0) return;
+
+    // Strict 10-second Batch Deduplication Lock: prevents duplicate uploads from multi-fire events
+    const batchHash = incomingFiles.map((f) => `${f.name}_${f.size}`).sort().join("|");
+    const now = Date.now();
+    if (batchHash === lastExtensionImportRef.current.hash && now - lastExtensionImportRef.current.timestamp < 10000) {
+      console.log("[LabelFlow] Skipping duplicate extension import batch:", batchHash);
+      return;
+    }
+    lastExtensionImportRef.current = { hash: batchHash, timestamp: now };
+
     setErrorMessage(null);
     setProcessingResult(null);
 
@@ -303,84 +342,6 @@ export default function HomePage() {
       freshConfig
     );
   };
-
-  // Global Window Message Listener for Chrome Extension (Always Active whether site is open, empty, or previewing)
-  useEffect(() => {
-    const handleExtensionMessage = (event: MessageEvent) => {
-      if (typeof window === "undefined") return;
-      if (event.origin !== window.location.origin) return;
-
-      const data = event.data;
-      if (!data || typeof data !== "object") return;
-
-      if (data.type === "LABELFLOW_VAULT_IMPORT") {
-        if (data._handledByPage) return;
-        data._handledByPage = true;
-
-        const incomingFiles = (data.files || []) as Array<{
-          id: string;
-          name: string;
-          size: number;
-          type: string;
-          base64?: string;
-          buffer?: ArrayBuffer;
-        }>;
-
-        if (!incomingFiles || incomingFiles.length === 0) return;
-
-        try {
-          const reconstructed: File[] = incomingFiles.map((item) => {
-            let blob: Blob;
-            if (item.base64 && typeof item.base64 === "string") {
-              const binaryString = atob(item.base64);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-              }
-              blob = new Blob([bytes], { type: item.type || "application/pdf" });
-            } else if (
-              item.buffer &&
-              (item.buffer instanceof ArrayBuffer || ArrayBuffer.isView(item.buffer))
-            ) {
-              blob = new Blob([item.buffer], { type: item.type || "application/pdf" });
-            } else {
-              throw new Error(`File payload for "${item.name}" has no valid binary data.`);
-            }
-
-            return new File([blob], item.name, {
-              type: item.type || "application/pdf",
-              lastModified: Date.now(),
-            });
-          });
-
-          if (reconstructed.length > 0) {
-            handleExtensionImportFiles(reconstructed);
-
-            const fileIds = incomingFiles.map((i) => i.id).filter(Boolean);
-            if (fileIds.length > 0) {
-              window.postMessage(
-                {
-                  source: "LABELFLOW_WEBSITE",
-                  type: "LABELFLOW_VAULT_IMPORT_RECEIVED",
-                  fileIds: fileIds,
-                },
-                window.location.origin
-              );
-            }
-          }
-        } catch (err) {
-          console.error("Failed to reconstruct extension files:", err);
-        }
-      }
-    };
-
-    window.addEventListener("message", handleExtensionMessage);
-    window.postMessage({ type: "LABELFLOW_PAGE_READY" }, window.location.origin);
-
-    return () => {
-      window.removeEventListener("message", handleExtensionMessage);
-    };
-  }, [processingConfig]);
 
   const handleRemoveFile = (id: string) => {
     const remaining = files.filter((item) => item.id !== id);
@@ -618,6 +579,8 @@ export default function HomePage() {
       setErrorMessage(msg);
     } finally {
       setIsProcessing(false);
+      setUploadProgress(0);
+      setActiveProcessingFileName("");
     }
   };
 
@@ -956,11 +919,15 @@ export default function HomePage() {
                 isProcessing={isProcessing}
               />
 
-              {/* PDF Dropzone Target */}
+              {/* PDF Dropzone Target with Live In-Place Upload & Cropping Progress */}
               <DropZone
                 onFilesSelected={handleFilesSelected}
                 onError={(msg) => setErrorMessage(msg)}
                 disabled={isProcessing}
+                isProcessing={isProcessing}
+                progressPercent={uploadProgress}
+                processingStage={processingStage}
+                activeFileName={activeProcessingFileName}
               />
 
               {/* Staged File List with page counts & remove option */}
@@ -970,29 +937,6 @@ export default function HomePage() {
                 onClearAll={handleClearAll}
                 disabled={isProcessing}
               />
-
-              {/* High-speed Single-Step Processing Progress Indicator */}
-              {isProcessing && (
-                <div className="w-full bg-white dark:bg-[#0C182B] border border-cyan-500/40 dark:border-cyan-neon/40 rounded-2xl p-5 shadow-xl animate-in fade-in duration-150">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-6 h-6 border-3 border-cyan-600 dark:border-cyan-neon border-t-transparent rounded-full animate-spin" />
-                    <div>
-                      <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center space-x-2">
-                        <span>Cropping & Organizing Labels...</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-neon/15 text-cyan-700 dark:text-cyan-neon font-mono">
-                          Fast Pipeline
-                        </span>
-                      </h4>
-                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                        Extracting 4×6 thermal pages • Grouping by Main SKU & Delivery Partner
-                      </p>
-                    </div>
-                  </div>
-                  <div className="w-full bg-slate-200 dark:bg-navy-800 h-1.5 rounded-full overflow-hidden mt-3.5">
-                    <div className="bg-gradient-to-r from-cyan-500 via-cyan-400 to-purple-brand h-full w-3/4 animate-pulse rounded-full" />
-                  </div>
-                </div>
-              )}
 
               {/* 4. Advanced Options — Collapsed by default */}
               <AdvancedOptions

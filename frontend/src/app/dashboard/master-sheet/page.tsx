@@ -43,8 +43,37 @@ export default function MasterSheetPage() {
   // Hidden print iframe
   const printIframeRef = useRef<HTMLIFrameElement>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  // Memory SWR cache for sub-10ms instant tab switching and navigation
+  const dataCacheRef = useRef<Map<string, { data: any; timestamp: number }>>(new Map());
+
+  const loadData = useCallback(async (forceRefresh = false) => {
+    const cacheKey = `${selectedPlatform}_${selectedCourier}_${selectedDays}_${search.trim()}_${page}`;
+    const cached = dataCacheRef.current.get(cacheKey);
+
+    // If cached within the last 45 seconds and not a forced reload, display instantly (<5ms)
+    if (!forceRefresh && cached && Date.now() - cached.timestamp < 45000) {
+      const res = cached.data;
+      setItems(res.items);
+      setTotal(res.total);
+      setFilteredTotal(res.filtered_total ?? res.total);
+      setAllTimeTotal(res.all_time_total ?? res.unique_orders_count);
+      setUniqueOrders(res.unique_orders_count);
+      setUniqueSkus(res.unique_skus_count);
+      if (res.marketplace_counts) {
+        setMarketplaceCounts(res.marketplace_counts);
+      }
+      if (res.couriers_list && res.couriers_list.length > 0) {
+        setCouriersList(res.couriers_list);
+      }
+      setLoading(false);
+      // Still revalidate in background silently if older than 10s
+      if (Date.now() - cached.timestamp < 10000) {
+        return;
+      }
+    } else if (!cached) {
+      setLoading(true);
+    }
+
     setError(null);
     try {
       const res = await apiGetMasterSheet({
@@ -55,6 +84,10 @@ export default function MasterSheetPage() {
         page,
         size: 25,
       });
+
+      // Save to fast cache
+      dataCacheRef.current.set(cacheKey, { data: res, timestamp: Date.now() });
+
       setItems(res.items);
       setTotal(res.total);
       setFilteredTotal(res.filtered_total ?? res.total);
@@ -68,9 +101,11 @@ export default function MasterSheetPage() {
         setCouriersList(res.couriers_list);
       }
     } catch (err: unknown) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load Master Sheet data."
-      );
+      if (!cached) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load Master Sheet data."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -83,7 +118,7 @@ export default function MasterSheetPage() {
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
-    loadData();
+    loadData(true);
   };
 
   const handleCopyText = (text: string, id: string) => {
@@ -166,7 +201,8 @@ export default function MasterSheetPage() {
         next.delete(labelId);
         return next;
       });
-      loadData();
+      dataCacheRef.current.clear();
+      await loadData(true);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Failed to delete label record.");
     }
@@ -231,7 +267,8 @@ export default function MasterSheetPage() {
       setSelectedIds(new Set());
       setSyncMessage(`Deleted ${res.deleted_count} selected orders successfully.`);
       setTimeout(() => setSyncMessage(null), 4000);
-      await loadData();
+      dataCacheRef.current.clear();
+      await loadData(true);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Failed to bulk delete selected labels.");
     } finally {
@@ -272,7 +309,8 @@ export default function MasterSheetPage() {
     try {
       const res = await apiSyncMasterSheetFromHistory();
       setSyncMessage(res.message || `Successfully synced ${res.synced_count} batch orders!`);
-      await loadData();
+      dataCacheRef.current.clear();
+      await loadData(true);
       setTimeout(() => setSyncMessage(null), 5000);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Failed to sync Master Sheet from history.");
@@ -302,12 +340,12 @@ export default function MasterSheetPage() {
               <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-neon/15 text-cyan-700 dark:text-cyan-neon font-bold border border-cyan-300 dark:border-cyan-neon/30">
                 {isFiltered
                   ? `${filteredTotal} of ${allTimeTotal} Orders`
-                  : `${allTimeTotal} Total Orders`}
+                  : `${allTimeTotal} Active Orders (30 Days)`}
               </span>
             </h1>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-2xl">
-            Consolidated master database of every cropped label. Deduplicated strictly by Order ID with exact PDF page locations, 1-click printing, and instant view.
+            Live consolidated ledger (last 30 days active). Deduplicated by Order ID with 1-click single print, jump to PDF, and automatic 60-day trash auto-removal.
           </p>
         </div>
 
@@ -513,11 +551,10 @@ export default function MasterSheetPage() {
               }}
               className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-navy-950 border border-slate-300 dark:border-navy-700 text-slate-900 dark:text-white text-xs focus:outline-none focus:border-cyan-500 dark:focus:border-cyan-neon"
             >
-              <option value="all">All Time</option>
+              <option value="all">Last 30 Days (Active)</option>
               <option value="today">Today</option>
               <option value="yesterday">Yesterday</option>
               <option value="7days">Last 7 Days</option>
-              <option value="30days">Last 30 Days</option>
               <option value="this_month">This Month</option>
             </select>
           </div>

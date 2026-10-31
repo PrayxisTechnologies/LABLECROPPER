@@ -14,7 +14,9 @@ import { getLocalProcessingHistory } from "./localHistory";
 function getRequestAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   if (typeof window !== "undefined") {
-    const token = localStorage.getItem("labelflow_jwt_token");
+    const token =
+      localStorage.getItem("labelflow_jwt_token") ||
+      localStorage.getItem("labelflow_token");
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
@@ -132,7 +134,8 @@ export async function validateFilesOnBackend(
 export async function processLabelsOnBackend(
   files: File[],
   config: ProcessingConfig,
-  marketplace?: string
+  marketplace?: string,
+  onProgress?: (percent: number, stage: string) => void
 ): Promise<ProcessingJobResponse> {
   const baseUrl = getApiBaseUrl();
   const formData = new FormData();
@@ -176,64 +179,171 @@ export async function processLabelsOnBackend(
     }
   } catch {}
 
-  let res: Response | null = null;
-  let lastError: string | null = null;
+  const sendXhr = (): Promise<ProcessingJobResponse> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${baseUrl}/labels/process`);
+      xhr.withCredentials = true;
 
-  // Make request with automatic single retry if server returns 502/503 (e.g. Render spin-up cold start)
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      res = await fetch(`${baseUrl}/labels/process`, {
-        method: "POST",
-        headers: getRequestAuthHeaders(),
-        credentials: "include",
-        body: formData,
-      });
-
-      if (res.ok) {
-        return (await res.json()) as ProcessingJobResponse;
+      const headers = getRequestAuthHeaders();
+      for (const [key, value] of Object.entries(headers)) {
+        xhr.setRequestHeader(key, value);
       }
 
-      // If 502 (Bad Gateway / Render Cold Start), wait 3.5s and retry once
-      if (res.status === 502 && attempt === 1) {
-        await new Promise((r) => setTimeout(r, 3500));
-        continue;
-      }
+      let currentPct = 20;
+      let stageInterval: NodeJS.Timeout | null = null;
 
-      break;
-    } catch (err: unknown) {
-      lastError = err instanceof Error ? err.message : "Connection failed";
-      if (attempt === 1) {
-        await new Promise((r) => setTimeout(r, 3500));
-      }
-    }
-  }
-
-  if (!res || !res.ok) {
-    let errorDetail = res
-      ? res.status === 502
-        ? "Render backend is warming up (HTTP 502). Please retry in 5 seconds."
-        : `Processing failed with status ${res.status}`
-      : (lastError || "Could not connect to processing server.");
-
-    if (res) {
-      try {
-        const errJson = await res.json();
-        if (errJson?.error?.message) {
-          errorDetail = errJson.error.message;
-        } else if (errJson?.detail) {
-          errorDetail =
-            typeof errJson.detail === "string"
-              ? errJson.detail
-              : JSON.stringify(errJson.detail);
+      const clearTicker = () => {
+        if (stageInterval) {
+          clearInterval(stageInterval);
+          stageInterval = null;
         }
-      } catch {
-        // Ignore JSON parse error
-      }
-    }
-    throw new Error(errorDetail);
-  }
+      };
 
-  return (await res.json()) as ProcessingJobResponse;
+      const fileCount = files.length;
+      const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+
+      onProgress?.(20, `Uploading ${fileCount > 1 ? `${fileCount} PDFs` : "PDF"} to engine...`);
+
+      // 1. Real Network Upload Progress (20% -> 32%)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const ratio = event.loaded / event.total;
+          const pct = Math.min(32, Math.max(20, Math.round(20 + ratio * 12)));
+          currentPct = pct;
+          const loadedKb = Math.round(event.loaded / 1024);
+          const totalKb = Math.round(event.total / 1024);
+          onProgress?.(
+            pct,
+            event.loaded < event.total
+              ? `Uploading ${fileCount > 1 ? `${fileCount} PDFs` : "PDF"} (${loadedKb} KB / ${totalKb} KB)...`
+              : "Uploaded. Starting thermal page extraction..."
+          );
+        }
+      };
+
+      // 2. Slow, Steady & Continuous Progression (Starts 32% -> 98% with ZERO STOPPAGE)
+      xhr.upload.onload = () => {
+        const serverStartTime = Date.now();
+        currentPct = Math.max(currentPct, 32);
+        onProgress?.(32, `Extracting 4×6 thermal pages (${fileCount} PDF${fileCount > 1 ? "s" : ""})...`);
+
+        clearTicker();
+        let lastIncrementTime = Date.now();
+
+        stageInterval = setInterval(() => {
+          const now = Date.now();
+          const elapsedSec = (now - serverStartTime) / 1000;
+
+          // Asymptotic smooth progression curve: ~50% at 3s, ~70% at 6s, ~84% at 10s, ~92% at 14s
+          const target = Math.round(32 + 66 * (1 - Math.exp(-elapsedSec / 8.0)));
+
+          // Strict guarantee of forward momentum: never pause for more than 320ms
+          if (target > currentPct) {
+            currentPct = target;
+            lastIncrementTime = now;
+          } else if (now - lastIncrementTime >= 320 && currentPct < 98) {
+            currentPct += 1;
+            lastIncrementTime = now;
+          }
+
+          currentPct = Math.min(98, currentPct);
+
+          let stageText = `Extracting 4×6 thermal pages (${fileCount} PDF${fileCount > 1 ? "s" : ""})...`;
+          if (currentPct >= 48 && currentPct < 65) {
+            stageText = "Isolating barcodes & detecting delivery couriers...";
+          } else if (currentPct >= 65 && currentPct < 80) {
+            stageText = "Detecting SKUs & Delivery Partners (Shadowfax, Delhivery...)...";
+          } else if (currentPct >= 80 && currentPct < 92) {
+            stageText = "Grouping by Main SKU & sorting picklist...";
+          } else if (currentPct >= 92) {
+            stageText = "Assembling print-ready vector PDF...";
+          }
+
+          onProgress?.(currentPct, stageText);
+        }, 90);
+      };
+
+      // 3. Fast Swift Sweep from wherever it is to 100% as soon as server finishes
+      const animateToCompletion = (fromPct: number): Promise<void> => {
+        return new Promise((res) => {
+          let p = Math.max(fromPct, 35);
+          const finishInterval = setInterval(() => {
+            p += p < 70 ? 8 : (p < 90 ? 6 : 4);
+            if (p >= 100) {
+              clearInterval(finishInterval);
+              onProgress?.(100, "✓ Complete! Opening preview...");
+              res();
+            } else {
+              let stageText = "Assembling print-ready vector PDF...";
+              if (p >= 90) stageText = "Finalizing print-ready batch...";
+              onProgress?.(p, stageText);
+            }
+          }, 20); // 20ms per step = ~180ms smooth fluid sweep to 100%
+        });
+      };
+
+      xhr.onload = async () => {
+        clearTicker();
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText) as ProcessingJobResponse;
+            // Fast sweep from current percentage (50-80%) to 100%
+            await animateToCompletion(currentPct);
+            resolve(data);
+          } catch {
+            reject(new Error("Invalid JSON response received from backend server."));
+          }
+        } else {
+          let errorDetail = `Processing failed with status ${xhr.status}`;
+          if (xhr.status === 502) {
+            errorDetail = "Cropper backend is warming up (HTTP 502). Please retry in a few seconds.";
+          } else {
+            try {
+              const errJson = JSON.parse(xhr.responseText);
+              if (errJson?.error?.message) {
+                errorDetail = errJson.error.message;
+              } else if (errJson?.detail) {
+                errorDetail =
+                  typeof errJson.detail === "string"
+                    ? errJson.detail
+                    : JSON.stringify(errJson.detail);
+              }
+            } catch {
+              // fallback
+            }
+          }
+          reject(new Error(errorDetail));
+        }
+      };
+
+      xhr.onerror = () => {
+        clearTicker();
+        reject(
+          new Error("Network connection error. Please check your internet connection or backend server status.")
+        );
+      };
+
+      xhr.ontimeout = () => {
+        clearTicker();
+        reject(new Error("Request timed out while waiting for cropper engine."));
+      };
+
+      xhr.send(formData);
+    });
+  };
+
+  try {
+    return await sendXhr();
+  } catch (err) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    if (errMessage.includes("502") || errMessage.includes("warming up")) {
+      onProgress?.(20, "Backend warming up. Retrying in 3 seconds...");
+      await new Promise((r) => setTimeout(r, 3200));
+      return await sendXhr();
+    }
+    throw err;
+  }
 }
 
 /**

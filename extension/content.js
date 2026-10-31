@@ -59,7 +59,7 @@ function broadcastExtensionReady() {
       type: "LABELFLOW_EXTENSION_STATUS",
       installed: true,
       vaultActive: true,
-      version: "2.8.2",
+      version: "2.8.4",
       auth: auth,
     },
     "*"
@@ -69,16 +69,16 @@ function broadcastExtensionReady() {
 
 // Deduplication guard to avoid firing duplicate window postMessages for the same batch
 let lastDeliveredBatchHash = "";
+let lastDeliveredTime = 0;
 function deliverFilesToPage(files, sourceDesc) {
   if (!files || files.length === 0) return;
-  const hash = files.map((f) => f.id || f.name).join("|");
-  if (hash === lastDeliveredBatchHash) {
+  const hash = files.map((f) => `${f.name || f.id}_${f.size || 0}`).sort().join("|");
+  const now = Date.now();
+  if (hash === lastDeliveredBatchHash && now - lastDeliveredTime < 10000) {
     return;
   }
   lastDeliveredBatchHash = hash;
-  setTimeout(() => {
-    if (lastDeliveredBatchHash === hash) lastDeliveredBatchHash = "";
-  }, 4000);
+  lastDeliveredTime = now;
 
   console.log(`[LabelFlow Extension] Delivering ${files.length} vault file(s) via ${sourceDesc}`);
   window.postMessage(
@@ -89,6 +89,11 @@ function deliverFilesToPage(files, sourceDesc) {
     },
     "*"
   );
+
+  // Immediately notify background service worker to clear memory queue so focus/re-render won't re-deliver
+  try {
+    chrome.runtime.sendMessage({ action: "VAULT_IMPORT_ACKNOWLEDGED" });
+  } catch {}
 }
 
 // Check for pending vault import files queued by the extension
@@ -219,17 +224,7 @@ window.addEventListener("message", (event) => {
   }
 });
 
-// Initial announcement on page load - immediate handoff
+// Initial announcement on page load - immediate handoff exactly once
 broadcastExtensionReady();
 checkAndDeliverPendingVaultImport();
 syncWebsiteHistoryToExtension();
-
-setTimeout(() => {
-  broadcastExtensionReady();
-  checkAndDeliverPendingVaultImport();
-}, 50);
-
-setTimeout(() => {
-  broadcastExtensionReady();
-  checkAndDeliverPendingVaultImport();
-}, 200);

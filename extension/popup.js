@@ -109,14 +109,33 @@ document.addEventListener("DOMContentLoaded", () => {
   // Dynamic API Base URL resolution: matches localhost vs production
   async function resolveApiBase() {
     try {
-      const tabs = await chrome.tabs.query({});
-      const localTab = tabs.find((t) => t.url && t.url.includes("localhost:3000"));
+      // 1. Prioritize active tab in the current window
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const currentUrl = activeTabs && activeTabs[0] && activeTabs[0].url ? activeTabs[0].url : "";
+
+      if (currentUrl.includes("localhost:3000") || currentUrl.includes("127.0.0.1:3000")) {
+        activeApiBase = "http://localhost:8000/api/v1";
+        return activeApiBase;
+      }
+      if (currentUrl.includes("labelcropper.prayxis.in") || currentUrl.includes("prayxis.in")) {
+        activeApiBase = "https://labelcropper.prayxis.in/api/v1";
+        return activeApiBase;
+      }
+
+      // 2. Fallback to any open tab
+      const allTabs = await chrome.tabs.query({});
+      const prodTab = allTabs.find((t) => t.url && (t.url.includes("labelcropper.prayxis.in") || t.url.includes("prayxis.in")));
+      if (prodTab) {
+        activeApiBase = "https://labelcropper.prayxis.in/api/v1";
+        return activeApiBase;
+      }
+      const localTab = allTabs.find((t) => t.url && t.url.includes("localhost:3000"));
       if (localTab) {
         activeApiBase = "http://localhost:8000/api/v1";
-      } else {
-        activeApiBase = "https://labelcropper.prayxis.in/api/v1";
+        return activeApiBase;
       }
     } catch {}
+    activeApiBase = "https://labelcropper.prayxis.in/api/v1";
     return activeApiBase;
   }
 
@@ -381,9 +400,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const cardRight = document.createElement("div");
       cardRight.className = "card-right";
 
+      const hasValidBytes = (item.size && item.size > 50) || item.isCloud || item.hasBlob || Boolean(item.base64 || item.buffer || item.blob);
       const tag = document.createElement("span");
-      tag.className = "tag-ready";
-      tag.textContent = "✓ Ready";
+      if (hasValidBytes) {
+        tag.className = "tag-ready";
+        tag.textContent = "✓ Ready";
+      } else {
+        tag.className = "tag-warning";
+        tag.textContent = "⚠️ 0 B (Re-upload)";
+        tag.title = "No PDF data found (0 B). Click '✕' to remove and re-upload with '+ Upload PDFs'.";
+      }
       cardRight.appendChild(tag);
 
       const delBtn = document.createElement("button");
@@ -1056,9 +1082,41 @@ document.addEventListener("DOMContentLoaded", () => {
         showBanner("Please select at least 1 history batch to re-print.", "info");
         return;
       }
-      const ids = selected.map((i) => i.id || i.job_id);
+      showBanner(`Preparing ${selected.length} batch(es) for re-print...`, "info");
+
+      // Hydrate binary from server or cache before restoring to pending queue
+      const validItems = [];
+      const failedItems = [];
+      for (const item of selected) {
+        let base64 = null;
+        try {
+          base64 = await ensureItemBinary(item);
+        } catch {}
+        if (base64) {
+          validItems.push(item);
+        } else {
+          failedItems.push(item.filename || item.name || "batch");
+        }
+      }
+
+      if (validItems.length === 0) {
+        showBanner(
+          `Original PDF binary nahi mila (${failedItems.join(", ")}). Kripya '+ Upload PDFs' se asli PDF upload karein.`,
+          "error"
+        );
+        return;
+      }
+
+      const ids = validItems.map((i) => i.id || i.job_id);
       await VaultStorage.reprintVaultFiles(ids);
-      showBanner(`Restored ${selected.length} batch(es) to Pending Labels!`, "success");
+      if (failedItems.length > 0) {
+        showBanner(
+          `Restored ${validItems.length} batch(es). (${failedItems.join(", ")} me data nahi mila — please re-upload).`,
+          "info"
+        );
+      } else {
+        showBanner(`✓ Restored ${validItems.length} batch(es) to Pending Labels!`, "success");
+      }
       switchTab("pending");
       await loadExtensionData(false);
     });
@@ -1171,13 +1229,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // 6. Direct URL download (reprinted history batches, download_url, view_url, job_id)
-    let url = item.download_url || item.view_url;
-    if (!url && item.job_id) {
-      url = `${activeApiBase}/jobs/${item.job_id}/download`;
+    const candidateUrls = [];
+    if (item.download_url) candidateUrls.push(item.download_url);
+    if (item.view_url) candidateUrls.push(item.view_url);
+    if (item.job_id) {
+      candidateUrls.push(`${activeApiBase}/labels/jobs/${item.job_id}/download/pdf`);
+      candidateUrls.push(`${activeApiBase}/jobs/${item.job_id}/download`);
     }
-    if (url) {
+
+    for (const rawUrl of candidateUrls) {
       try {
-        let fullUrl = url;
+        let fullUrl = rawUrl;
         if (fullUrl.startsWith("/")) {
           const origin = activeApiBase.replace(/\/api\/v1\/?$/, "");
           fullUrl = `${origin}${fullUrl}`;
@@ -1209,26 +1271,57 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         }
       } catch (err) {
-        console.warn("Direct URL download failed for", item.name, err);
+        console.warn("Candidate URL download failed for", item.name, rawUrl, err);
       }
     }
 
-    // 7. Chrome Downloads fallback
-    if (item.downloadId && typeof chrome !== "undefined" && chrome.downloads) {
+    // 7. Chrome Downloads fallback (search by downloadId or query by name)
+    if (typeof chrome !== "undefined" && chrome.downloads) {
       try {
-        const results = await chrome.downloads.search({ id: Number(item.downloadId) });
-        if (results && results[0] && results[0].url) {
-          const resp = await fetch(results[0].url);
-          if (resp && resp.ok) {
-            const buf = await resp.arrayBuffer();
-            if (buf && buf.byteLength > 50) {
-              item.buffer = buf;
-              item.base64 = bufferToBase64(buf);
-              item.size = buf.byteLength;
-              return item.base64;
+        let queryArgs = null;
+        if (item.downloadId) {
+          queryArgs = { id: Number(item.downloadId) };
+        } else if (item.name) {
+          queryArgs = { query: [item.name], limit: 5 };
+        }
+        if (queryArgs) {
+          const results = await chrome.downloads.search(queryArgs);
+          for (const resItem of results || []) {
+            if (
+              resItem &&
+              resItem.url &&
+              (resItem.url.startsWith("http://") ||
+                resItem.url.startsWith("https://") ||
+                resItem.url.startsWith("blob:"))
+            ) {
+              try {
+                const resp = await fetch(resItem.url);
+                if (resp && resp.ok) {
+                  const buf = await resp.arrayBuffer();
+                  if (buf && buf.byteLength > 50) {
+                    item.buffer = buf;
+                    item.base64 = bufferToBase64(buf);
+                    item.size = buf.byteLength;
+                    await VaultStorage.addFilesToVault([
+                      {
+                        name: item.name,
+                        buffer: buf,
+                        base64: item.base64,
+                        blob: new Blob([buf], { type: "application/pdf" }),
+                        size: buf.byteLength,
+                        type: "application/pdf",
+                        platform: item.platform || "Shipping Label",
+                      },
+                    ]);
+                    return item.base64;
+                  }
+                }
+              } catch {}
             }
           }
         }
+      } catch {}
+    }
       } catch {}
     }
 
@@ -1297,8 +1390,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (filePayloads.length === 0) {
         cropSelectedBtn.disabled = false;
         updateCtaButton();
+        const namesList = failedItems.length > 0 ? failedItems.join(", ") : "Selected file(s)";
         showBanner(
-          `Could not load PDF data for: ${failedItems.join(", ")}. Please re-upload.`,
+          `⚠️ "${namesList}" me PDF data nahi mila (0 B). Kripya isko '✕' se delete karke '+ Upload PDFs' se fresh file upload karein.`,
           "error"
         );
         return;

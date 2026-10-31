@@ -641,7 +641,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         if (!filePayloads || filePayloads.length === 0) {
-          sendResponse({ success: false, error: "No PDF files selected in the Vault." });
+          sendResponse({
+            success: false,
+            error: "Selected PDF file me valid data nahi mila (0 B). Kripya '✕' se remove karke '+ Upload PDFs' se fresh PDF upload karein.",
+          });
           return;
         }
 
@@ -725,6 +728,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
             if (resp && resp.received) {
               delivered = true;
+              memoryVaultPayloads = null;
+              await chrome.storage.local.remove(PENDING_VAULT_IMPORT_KEY);
             }
           } catch (err) {
             console.warn("[LabelFlow Extension] Live tabs.sendMessage failed:", err);
